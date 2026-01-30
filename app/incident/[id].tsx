@@ -193,6 +193,8 @@ export default function IncidentDetailsScreen() {
     if (loading) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <Stack.Screen options={{ headerShown: false }} />
+                <StatusBar style="dark" />
                 <ActivityIndicator size="large" color={COLORS.primary} />
             </View>
         );
@@ -201,6 +203,8 @@ export default function IncidentDetailsScreen() {
     if (!incident) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <Stack.Screen options={{ headerShown: false }} />
+                <StatusBar style="dark" />
                 <Text style={{ color: COLORS.textMuted }}>Incident not found</Text>
             </View>
         );
@@ -260,7 +264,7 @@ export default function IncidentDetailsScreen() {
                             <View style={styles.statDivider} />
                             <View style={styles.statItem}>
                                 <Shield size={16} color={COLORS.primary} />
-                                <Text style={styles.statText}>{incident.status || 'Verified'}</Text>
+                                <Text style={styles.statText}>{incident.status || 'Pending'}</Text>
                             </View>
                             <View style={styles.statDivider} />
                             <View style={styles.statItem}>
@@ -276,8 +280,37 @@ export default function IncidentDetailsScreen() {
                             {incident.description}
                         </Text>
 
+                        {/* Terminal State Banner */}
+                        {['rejected', 'closed'].includes((incident.status || '').toLowerCase()) && (
+                            <View style={{
+                                backgroundColor: incident.status?.toLowerCase() === 'rejected' ? COLORS.error + '15' : COLORS.success + '15',
+                                padding: 16,
+                                borderRadius: 16,
+                                marginBottom: 24,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: 12
+                            }}>
+                                {incident.status?.toLowerCase() === 'rejected' ? (
+                                    <AlertTriangle size={24} color={COLORS.error} />
+                                ) : (
+                                    <Shield size={24} color={COLORS.success} />
+                                )}
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontWeight: '800', fontSize: 16, color: incident.status?.toLowerCase() === 'rejected' ? COLORS.error : COLORS.success }}>
+                                        {incident.status?.toLowerCase() === 'rejected' ? 'Report Rejected' : 'Case Closed'}
+                                    </Text>
+                                    <Text style={{ fontSize: 13, color: COLORS.textSecondary, marginTop: 4 }}>
+                                        {incident.status?.toLowerCase() === 'rejected'
+                                            ? 'This report was marked as fake by the Command Center.'
+                                            : 'This incident has been resolved and officially closed.'}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+
                         {/* Responder Actions (Visible only to Responders) */}
-                        {profile?.role === 'responder' && (
+                        {profile?.role === 'responder' && !['rejected', 'closed'].includes((incident.status || '').toLowerCase()) && (
                             <View style={[styles.section, { backgroundColor: COLORS.primary + '10', padding: 20, borderRadius: 24 }]}>
                                 <View style={styles.rowBetween}>
                                     <Text style={[styles.sectionTitle, { color: COLORS.primary }]}>Responder Dashboard</Text>
@@ -285,7 +318,7 @@ export default function IncidentDetailsScreen() {
                                 </View>
                                 <Text style={styles.responderHint}>Current status: {incident.status}</Text>
                                 <View style={styles.responderBtnRow}>
-                                    {['Verified', 'In-Progress', 'Resolved'].map(s => (
+                                    {['Verified', 'Assigned', 'Resolved'].map(s => (
                                         <TouchableOpacity
                                             key={s}
                                             style={[styles.responderActionBtn, incident.status === s && { backgroundColor: COLORS.primary }]}

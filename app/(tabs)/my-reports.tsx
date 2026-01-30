@@ -57,12 +57,17 @@ export default function MyReportsScreen() {
         fetchReports();
     };
     const getStatusStyle = (status: string) => {
-        switch (status) {
-            case 'Pending': return { bg: COLORS.warning + '15', text: COLORS.warning, icon: Clock };
-            case 'In-Progress': return { bg: COLORS.info + '15', text: COLORS.info, icon: AlertCircle };
-            case 'Resolved': return { bg: COLORS.primary + '15', text: COLORS.primary, icon: CheckCircle2 };
-            case 'Verified': return { bg: COLORS.success + '15', text: COLORS.success, icon: CheckCircle2 };
-            case 'Rejected': return { bg: COLORS.error + '15', text: COLORS.error, icon: AlertCircle };
+        const s = (status || '').toLowerCase();
+        switch (s) {
+            case 'submitted':
+            case 'pending':
+            case 'under_review': return { bg: COLORS.warning + '15', text: COLORS.warning, icon: Clock };
+            case 'verified': return { bg: COLORS.success + '15', text: COLORS.success, icon: CheckCircle2 };
+            case 'assigned':
+            case 'in_progress': return { bg: COLORS.info + '15', text: COLORS.info, icon: AlertCircle };
+            case 'resolved': return { bg: COLORS.primary + '15', text: COLORS.primary, icon: CheckCircle2 };
+            case 'closed': return { bg: COLORS.textMuted + '15', text: COLORS.textMuted, icon: CheckCircle2 };
+            case 'rejected': return { bg: COLORS.error + '15', text: COLORS.error, icon: AlertCircle };
             default: return { bg: COLORS.background, text: COLORS.textSecondary, icon: Clock };
         }
     };
@@ -157,13 +162,13 @@ export default function MyReportsScreen() {
                                 <View style={[styles.statItem, { backgroundColor: COLORS.primary + '10' }]}>
                                     <Text style={styles.statLabel}>Resolved</Text>
                                     <Text style={[styles.statValue, { color: COLORS.primary }]}>
-                                        {reports.filter(r => r.status === 'Resolved').length}
+                                        {reports.filter(r => ['Resolved', 'Closed', 'resolved', 'closed'].includes(r.status)).length}
                                     </Text>
                                 </View>
                                 <View style={[styles.statItem, { backgroundColor: COLORS.warning + '10' }]}>
-                                    <Text style={styles.statLabel}>Pending</Text>
+                                    <Text style={styles.statLabel}>In Progress</Text>
                                     <Text style={[styles.statValue, { color: COLORS.warning }]}>
-                                        {reports.filter(r => r.status === 'Pending').length}
+                                        {reports.filter(r => ['Submitted', 'Pending', 'Under Review', 'Assigned', 'In Progress', 'submitted', 'pending', 'under_review', 'assigned', 'in_progress'].includes(r.status)).length}
                                     </Text>
                                 </View>
                             </View>

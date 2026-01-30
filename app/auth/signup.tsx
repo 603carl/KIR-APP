@@ -1,13 +1,14 @@
+import { COUNTIES } from '@/constants/Counties';
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ArrowLeft, ArrowRight, Check, Lock, Mail, User } from 'lucide-react-native';
+import { ArrowLeft, ArrowRight, Check, Lock, Mail, MapPin, Search, User } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width, height } = Dimensions.get('window');
@@ -22,10 +23,17 @@ export default function SignupScreen() {
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [agree, setAgree] = useState(false);
+    const [county, setCounty] = useState('');
+    const [isCountyModalVisible, setIsCountyModalVisible] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const filteredCounties = COUNTIES.filter(c =>
+        c.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
     const handleSignUp = async () => {
-        if (!email || !password || !fullName) {
-            Alert.alert('Error', 'Please fill in all fields');
+        if (!email || !password || !fullName || !county) {
+            Alert.alert('Error', 'Please fill in all fields including your County');
             return;
         }
         if (!agree) {
@@ -42,7 +50,10 @@ export default function SignupScreen() {
             email: email.trim(),
             password,
             options: {
-                data: { full_name: fullName.trim() }
+                data: {
+                    full_name: fullName.trim(),
+                    county: county
+                }
             }
         });
 
@@ -114,6 +125,20 @@ export default function SignupScreen() {
                                         onChangeText={setEmail}
                                     />
                                 </View>
+
+                                <TouchableOpacity
+                                    style={styles.inputContainer}
+                                    onPress={() => setIsCountyModalVisible(true)}
+                                >
+                                    <View style={styles.inputIconBox}>
+                                        <MapPin size={18} color={COLORS.white} />
+                                    </View>
+                                    <View style={{ flex: 1, marginLeft: 12 }}>
+                                        <Text style={[styles.inputFieldText, !county && { color: 'rgba(255,255,255,0.6)' }]}>
+                                            {county || 'Select Your County'}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
 
                                 <View style={styles.inputContainer}>
                                     <View style={styles.inputIconBox}>
@@ -207,6 +232,56 @@ export default function SignupScreen() {
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
+
+                {/* County Selection Modal */}
+                <Modal
+                    visible={isCountyModalVisible}
+                    animationType="slide"
+                    transparent={true}
+                    onRequestClose={() => setIsCountyModalVisible(false)}
+                >
+                    <BlurView intensity={90} tint="dark" style={styles.modalContainer}>
+                        <View style={styles.modalContent}>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>Select County</Text>
+                                <TouchableOpacity onPress={() => setIsCountyModalVisible(false)}>
+                                    <Text style={styles.closeText}>Close</Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            <View style={styles.searchContainer}>
+                                <Search size={20} color="rgba(255,255,255,0.5)" />
+                                <TextInput
+                                    placeholder="Search county..."
+                                    style={styles.searchInput}
+                                    placeholderTextColor="rgba(255,255,255,0.4)"
+                                    value={searchQuery}
+                                    onChangeText={setSearchQuery}
+                                    autoFocus
+                                />
+                            </View>
+
+                            <FlatList
+                                data={filteredCounties}
+                                keyExtractor={(item: string) => item}
+                                contentContainerStyle={{ paddingBottom: 40 }}
+                                renderItem={({ item }: { item: string }) => (
+                                    <TouchableOpacity
+                                        style={[styles.countyItem, county === item && styles.countyItemActive]}
+                                        onPress={() => {
+                                            setCounty(item);
+                                            setIsCountyModalVisible(false);
+                                            setSearchQuery('');
+                                        }}
+                                    >
+                                        <Text style={[styles.countyText, county === item && styles.countyTextActive]}>{item}</Text>
+                                        {county === item && <Check size={18} color={COLORS.primary} />}
+                                    </TouchableOpacity>
+                                )}
+                            />
+                        </View>
+                    </BlurView>
+                </Modal>
             </SafeAreaView>
         </View>
     );
@@ -236,7 +311,21 @@ const styles = StyleSheet.create({
     signupBtn: { height: 64, borderRadius: 24, overflow: 'hidden', marginTop: 16, ...SHADOWS.premium },
     gradient: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
     signupBtnText: { color: COLORS.primary, fontSize: 18, fontWeight: '900' },
+    inputFieldText: { color: COLORS.white, fontSize: 16, fontWeight: '600' },
     footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 32 },
     footerText: { color: 'rgba(255,255,255,0.6)', fontSize: 14, fontWeight: '600' },
     loginText: { color: COLORS.white, fontWeight: '800', fontSize: 14, textDecorationLine: 'underline' },
+
+    // Modal Styles
+    modalContainer: { flex: 1, justifyContent: 'flex-end' },
+    modalContent: { backgroundColor: 'rgba(20,20,20,0.95)', borderTopLeftRadius: 32, borderTopRightRadius: 32, height: '80%', padding: 24 },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+    modalTitle: { fontSize: 24, fontWeight: '900', color: COLORS.white },
+    closeText: { color: COLORS.primary, fontWeight: '800', fontSize: 16 },
+    searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', height: 56, borderRadius: 16, paddingHorizontal: 16, marginBottom: 16 },
+    searchInput: { flex: 1, marginLeft: 12, color: COLORS.white, fontSize: 16, fontWeight: '600' },
+    countyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+    countyItemActive: { backgroundColor: 'rgba(23,163,74,0.1)', paddingHorizontal: 12, borderRadius: 12 },
+    countyText: { fontSize: 17, color: 'rgba(255,255,255,0.8)', fontWeight: '600' },
+    countyTextActive: { color: COLORS.primary, fontWeight: '800' },
 });

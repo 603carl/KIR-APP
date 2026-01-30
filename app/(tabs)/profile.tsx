@@ -1,7 +1,9 @@
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
+import { registerForPushNotificationsAsync, savePushToken, sendTestNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useRouter } from 'expo-router';
 import {
     Award,
@@ -16,8 +18,9 @@ import {
     TrendingUp,
     User
 } from 'lucide-react-native';
+import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function ProfileScreen() {
@@ -48,45 +51,86 @@ export default function ProfileScreen() {
     const [editBio, setEditBio] = useState('');
     const [editLocation, setEditLocation] = useState('');
 
+    // Emergency Info States
+    const [bloodGroup, setBloodGroup] = useState('');
+    const [emergencyName, setEmergencyName] = useState('');
+    const [emergencyPhone, setEmergencyPhone] = useState('');
+    const [medicalConditions, setMedicalConditions] = useState('');
+
+    // Security States
+    const [isBiometricSupported, setIsBiometricSupported] = useState(false);
+    const [isBiometricEnrolled, setIsBiometricEnrolled] = useState(false);
+
     useEffect(() => {
         fetchProfile();
+        checkBiometrics();
+        setupNotifications();
     }, []);
+
+    const checkBiometrics = async () => {
+        const compatible = await LocalAuthentication.hasHardwareAsync();
+        setIsBiometricSupported(compatible);
+        const enrolled = await LocalAuthentication.isEnrolledAsync();
+        setIsBiometricEnrolled(enrolled);
+    };
+
+    const setupNotifications = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+            const token = await registerForPushNotificationsAsync();
+            if (token) {
+                await savePushToken(session.user.id, token);
+            }
+        }
+    };
+
+    const handleAuthenticate = async () => {
+        const result = await LocalAuthentication.authenticateAsync({
+            promptMessage: 'Authenticate to access security settings',
+            fallbackLabel: 'Use Passcode',
+        });
+        return result.success;
+    };
 
     const fetchProfile = async () => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session?.user) {
                 router.replace('/auth/login');
                 return;
             }
 
-            const { data, error } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', user.id)
-                .single();
+            const userId = session.user.id;
 
-            if (error) throw error;
-            setProfile(data);
-            setEditName(data.full_name || '');
-            setEditBio(data.bio || '');
-            setEditLocation(data.location_name || 'Nairobi, Kenya');
+            // Fetch all data in parallel for ultimate speed
+            const [profileRes, reportsRes, resolvedRes, verifyRes, iqRes] = await Promise.all([
+                supabase.from('profiles').select('*').eq('id', userId).single(),
+                supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+                supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'Resolved'),
+                supabase.from('verifications').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+                supabase.rpc('get_user_civic_intelligence', { target_user_id: userId })
+            ]);
 
-            // Fetch basic counts
-            const { count: reportCount } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
-            const { count: resolvedCount } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('status', 'Resolved');
-            const { count: verifyCount } = await supabase.from('verifications').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
+            if (profileRes.error) throw profileRes.error;
 
-            // Fetch Advanced Intelligence
-            const { data: iqData, error: iqError } = await supabase.rpc('get_user_civic_intelligence', { target_user_id: user.id });
+            const profileData = profileRes.data;
+            setProfile(profileData);
+            setEditName(profileData.full_name || '');
+            setEditBio(profileData.bio || '');
+            setEditLocation(profileData.location_name || 'Nairobi, Kenya');
 
-            if (iqError) throw iqError;
-            const iq = iqData?.[0] || {};
+            // Set Emergency Info
+            setBloodGroup(profileData.blood_group || '');
+            setEmergencyName(profileData.emergency_contact_name || '');
+            setEmergencyPhone(profileData.emergency_contact_phone || '');
+            setMedicalConditions(profileData.medical_conditions || '');
+
+            const iq = iqRes.data?.[0] || {};
 
             setStats({
-                reports: reportCount || 0,
-                resolved: resolvedCount || 0,
-                verifications: verifyCount || 0,
+                reports: reportsRes.count || 0,
+                resolved: resolvedRes.count || 0,
+                verifications: verifyRes.count || 0,
                 score: iq.impact_score || 0,
                 velocity: iq.velocity || 0,
                 isFirstResponder: iq.is_first_responder || false,
@@ -96,6 +140,9 @@ export default function ProfileScreen() {
 
         } catch (error: any) {
             console.error('Profile fetch error:', error);
+            if (error.message?.includes('JWT')) {
+                router.replace('/auth/login');
+            }
         } finally {
             setLoading(false);
         }
@@ -166,11 +213,24 @@ export default function ProfileScreen() {
                     full_name: editName,
                     bio: editBio,
                     location_name: editLocation,
+                    blood_group: bloodGroup,
+                    emergency_contact_name: emergencyName,
+                    emergency_contact_phone: emergencyPhone,
+                    medical_conditions: medicalConditions,
                 })
                 .eq('id', user.id);
 
             if (error) throw error;
-            setProfile({ ...profile, full_name: editName, bio: editBio, location_name: editLocation });
+            setProfile({
+                ...profile,
+                full_name: editName,
+                bio: editBio,
+                location_name: editLocation,
+                blood_group: bloodGroup,
+                emergency_contact_name: emergencyName,
+                emergency_contact_phone: emergencyPhone,
+                medical_conditions: medicalConditions
+            });
             setEditModalVisible(false);
             Alert.alert('Success', 'Profile updated successfully!');
         } catch (error: any) {
@@ -235,15 +295,19 @@ export default function ProfileScreen() {
                     style={styles.headerGradient}
                 >
                     <SafeAreaView edges={['top']} style={styles.headerContent}>
-                        <View style={styles.profileRow}>
+                        <MotiView
+                            from={{ opacity: 0, translateY: -20 }}
+                            animate={{ opacity: 1, translateY: 0 }}
+                            style={styles.profileRow}
+                        >
                             <TouchableOpacity style={styles.imageContainer} onPress={pickAvatar} disabled={uploading}>
-                                {uploading ? (
+                                {uploading || loading ? (
                                     <View style={[styles.profileImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)' }]}>
                                         <ActivityIndicator color={COLORS.white} />
                                     </View>
                                 ) : (
                                     <Image
-                                        source={{ uri: profile?.avatar_url || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop' }}
+                                        source={profile?.avatar_url ? { uri: profile.avatar_url } : require('@/assets/images/icon.png')}
                                         style={styles.profileImage}
                                     />
                                 )}
@@ -252,27 +316,40 @@ export default function ProfileScreen() {
                                 </TouchableOpacity>
                             </TouchableOpacity>
                             <View style={styles.nameContainer}>
-                                <Text style={styles.name}>{profile?.full_name || 'Kenyan Citizen'}</Text>
-                                <Text style={styles.rank}>{profile?.role === 'responder' ? 'Official Responder' : 'Verified Citizen'} • {stats.topInterest}</Text>
+                                {loading ? (
+                                    <MotiView
+                                        from={{ opacity: 0.3 }}
+                                        animate={{ opacity: 0.7 }}
+                                        transition={{ loop: true, type: 'timing', duration: 1000 }}
+                                        style={{ width: 150, height: 28, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 8 }}
+                                    />
+                                ) : (
+                                    <>
+                                        <Text style={styles.name}>{profile?.full_name || 'Anonymous User'}</Text>
+                                        <Text style={styles.rank}>{profile?.role === 'responder' ? 'Official Responder' : 'Verified Citizen'} • {stats.topInterest}</Text>
+                                    </>
+                                )}
                             </View>
-                        </View>
+                        </MotiView>
 
                         <View style={styles.statsOverview}>
                             <View style={styles.statBox}>
-                                <Text style={styles.statNumber}>{stats.reports}</Text>
+                                {loading ? <View style={styles.statSkeleton} /> : <Text style={styles.statNumber}>{stats.reports}</Text>}
                                 <Text style={styles.statLabel}>Reports</Text>
                             </View>
                             <View style={styles.statDivider} />
                             <View style={styles.statBox}>
-                                <Text style={styles.statNumber}>{stats.resolved}</Text>
+                                {loading ? <View style={styles.statSkeleton} /> : <Text style={styles.statNumber}>{stats.resolved}</Text>}
                                 <Text style={styles.statLabel}>Resolved</Text>
                             </View>
                             <View style={styles.statDivider} />
                             <View style={styles.statBox}>
-                                <View style={styles.scoreRow}>
-                                    <Text style={styles.statNumber}>{stats.score}</Text>
-                                    {stats.velocity > 0 && <TrendingUp size={10} color={COLORS.success} />}
-                                </View>
+                                {loading ? <View style={styles.statSkeleton} /> : (
+                                    <View style={styles.scoreRow}>
+                                        <Text style={styles.statNumber}>{stats.score}</Text>
+                                        {stats.velocity > 0 && <TrendingUp size={10} color={COLORS.success} />}
+                                    </View>
+                                )}
                                 <Text style={styles.statLabel}>Impact Score</Text>
                             </View>
                         </View>
@@ -299,11 +376,11 @@ export default function ProfileScreen() {
 
                     <Text style={styles.sectionTitle}>Account Settings</Text>
                     <View style={styles.card}>
-                        <MenuItem icon={User} title="Personal Information" subtitle="Edit your profile and contact info" onPress={() => { setActiveModal('info'); setEditModalVisible(true); }} />
+                        <MenuItem icon={User} title="Personal & Emergency Info" subtitle="Edit profile and emergency contact" onPress={() => { setActiveModal('info'); setEditModalVisible(true); }} />
                         <View style={styles.divider} />
                         <MenuItem icon={Bell} title="Notifications" subtitle="Push, email, and emergency alerts" onPress={() => { setActiveModal('notifications'); setEditModalVisible(true); }} />
                         <View style={styles.divider} />
-                        <MenuItem icon={Shield} title="Privacy & Security" subtitle="Anonymous reporting and data settings" onPress={() => { setActiveModal('privacy'); setEditModalVisible(true); }} />
+                        <MenuItem icon={Shield} title="Privacy & Security" subtitle="Anonymous reporting and app lock" onPress={() => { setActiveModal('privacy'); setEditModalVisible(true); }} />
                     </View>
 
                     <Text style={styles.sectionTitle}>Support & Community</Text>
@@ -323,7 +400,7 @@ export default function ProfileScreen() {
                         <Text style={styles.logoutText}>Sign Out</Text>
                     </TouchableOpacity>
 
-                    <Text style={styles.versionText}>Version 1.0.0 (Executive Build)</Text>
+                    <Text style={styles.versionText}>Version 1.0.0 (Premium Build)</Text>
                     <View style={{ height: 120 }} />
                 </View>
             </ScrollView>
@@ -335,99 +412,200 @@ export default function ProfileScreen() {
                 transparent={true}
                 onRequestClose={() => setEditModalVisible(false)}
             >
-                <View style={styles.modalOverlay}>
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => setEditModalVisible(false)} />
-                    <View style={[styles.modalContent, { paddingBottom: Math.max(20, insets.bottom) }]}>
-                        <View style={styles.modalHeader}>
-                            <View style={styles.modalHandle} />
-                            <Text style={styles.modalTitle}>
-                                {activeModal === 'info' ? 'Edit Profile' :
-                                    activeModal === 'notifications' ? 'Notification Settings' : 'Privacy Settings'}
-                            </Text>
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    style={{ flex: 1 }}
+                >
+                    <View style={styles.modalOverlay}>
+                        <TouchableOpacity
+                            style={styles.modalCloseOverlay}
+                            activeOpacity={1}
+                            onPress={() => setEditModalVisible(false)}
+                        />
+                        <View style={[styles.modalContent, { height: Dimensions.get('window').height * 0.9, paddingBottom: Math.max(20, insets.bottom) }]}>
+                            <View style={styles.modalHeader}>
+                                <View style={styles.modalHandle} />
+                                <Text style={styles.modalTitle}>
+                                    {activeModal === 'info' ? 'Edit Profile & Emergency' :
+                                        activeModal === 'notifications' ? 'Notification Settings' : 'Privacy & Security'}
+                                </Text>
+                            </View>
+
+                            <ScrollView
+                                showsVerticalScrollIndicator={false}
+                                contentContainerStyle={styles.modalScrollContent}
+                                keyboardShouldPersistTaps="handled"
+                            >
+                                {activeModal === 'info' && (
+                                    <View style={styles.modalBody}>
+                                        <View style={styles.inputGroup}>
+                                            <Text style={styles.modalLabel}>Full Name</Text>
+                                            <TextInput
+                                                style={styles.modalInput}
+                                                value={editName}
+                                                onChangeText={setEditName}
+                                                placeholder="Enter your name"
+                                            />
+                                        </View>
+
+                                        <View style={styles.row}>
+                                            <View style={{ flex: 1, marginRight: 8 }}>
+                                                <View style={styles.inputGroup}>
+                                                    <Text style={styles.modalLabel}>Blood Group</Text>
+                                                    <TextInput
+                                                        style={styles.modalInput}
+                                                        value={bloodGroup}
+                                                        onChangeText={setBloodGroup}
+                                                        placeholder="e.g. O+"
+                                                    />
+                                                </View>
+                                            </View>
+                                            <View style={{ flex: 2 }}>
+                                                <View style={styles.inputGroup}>
+                                                    <Text style={styles.modalLabel}>Primary Location</Text>
+                                                    <TextInput
+                                                        style={styles.modalInput}
+                                                        value={editLocation}
+                                                        onChangeText={setEditLocation}
+                                                        placeholder="e.g. Nairobi"
+                                                    />
+                                                </View>
+                                            </View>
+                                        </View>
+
+                                        <View style={styles.inputGroup}>
+                                            <Text style={styles.modalLabel}>Emergency Contact Name</Text>
+                                            <TextInput
+                                                style={styles.modalInput}
+                                                value={emergencyName}
+                                                onChangeText={setEmergencyName}
+                                                placeholder="Name of contact"
+                                            />
+                                        </View>
+
+                                        <View style={styles.inputGroup}>
+                                            <Text style={styles.modalLabel}>Emergency Contact Phone</Text>
+                                            <TextInput
+                                                style={styles.modalInput}
+                                                value={emergencyPhone}
+                                                onChangeText={setEmergencyPhone}
+                                                placeholder="+254..."
+                                                keyboardType="phone-pad"
+                                            />
+                                        </View>
+
+                                        <View style={styles.inputGroup}>
+                                            <Text style={styles.modalLabel}>Medical Conditions / Allergies</Text>
+                                            <TextInput
+                                                style={[styles.modalInput, { height: 100, textAlignVertical: 'top' }]}
+                                                value={medicalConditions}
+                                                onChangeText={setMedicalConditions}
+                                                multiline
+                                                placeholder="Any critical medical info..."
+                                            />
+                                        </View>
+
+                                        <View style={styles.inputGroup}>
+                                            <Text style={styles.modalLabel}>Bio</Text>
+                                            <TextInput
+                                                style={[styles.modalInput, { height: 100, textAlignVertical: 'top' }]}
+                                                value={editBio}
+                                                onChangeText={setEditBio}
+                                                multiline
+                                                placeholder="Tell us about yourself..."
+                                            />
+                                        </View>
+
+                                        <TouchableOpacity
+                                            style={styles.saveBtn}
+                                            onPress={handleUpdateProfile}
+                                            disabled={saving}
+                                        >
+                                            {saving ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.saveBtnText}>Save Changes</Text>}
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+
+                                {activeModal === 'notifications' && (
+                                    <View style={styles.modalBody}>
+                                        {[
+                                            { key: 'push', title: 'Push Notifications', sub: 'Instant emergency alerts' },
+                                            { key: 'email', title: 'Email Reports', sub: 'Weekly summaries of incidents' },
+                                            { key: 'emergency', title: 'Critical Alerts', sub: 'Priority security warnings' },
+                                        ].map(item => (
+                                            <View key={item.key} style={styles.prefRow}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.prefTitle}>{item.title}</Text>
+                                                    <Text style={styles.prefSub}>{item.sub}</Text>
+                                                </View>
+                                                <Switch
+                                                    value={profile?.notification_prefs?.[item.key] ?? true}
+                                                    onValueChange={(val) => handleUpdatePrefs(item.key, val, 'notifications')}
+                                                    trackColor={{ false: COLORS.border, true: COLORS.primary }}
+                                                />
+                                            </View>
+                                        ))}
+
+                                        <TouchableOpacity
+                                            style={[styles.prefRow, { backgroundColor: COLORS.primary + '10', borderColor: COLORS.primary + '30', borderWidth: 1 }]}
+                                            onPress={sendTestNotification}
+                                        >
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={[styles.prefTitle, { color: COLORS.primary }]}>Test Alert</Text>
+                                                <Text style={styles.prefSub}>Send a test emergency notification now</Text>
+                                            </View>
+                                            <Bell size={20} color={COLORS.primary} />
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+
+                                {activeModal === 'privacy' && (
+                                    <View style={styles.modalBody}>
+                                        {isBiometricSupported && (
+                                            <View style={[styles.prefRow, { marginBottom: 12, backgroundColor: COLORS.gold + '10' }]}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.prefTitle}>Biometric Lock</Text>
+                                                    <Text style={styles.prefSub}>Require Fingerprint/FaceID to open app</Text>
+                                                </View>
+                                                <Switch
+                                                    value={profile?.privacy_settings?.biometric_lock ?? false}
+                                                    onValueChange={async (val) => {
+                                                        if (val) {
+                                                            const success = await handleAuthenticate();
+                                                            if (!success) return;
+                                                        }
+                                                        handleUpdatePrefs('biometric_lock', val, 'privacy');
+                                                    }}
+                                                    trackColor={{ false: COLORS.border, true: COLORS.gold }}
+                                                />
+                                            </View>
+                                        )}
+                                        {[
+                                            { key: 'anonymous_reporting', title: 'Anonymous by Default', sub: 'Keep your identity hidden' },
+                                            { key: 'show_activity', title: 'Show My Activity', sub: 'Allow others to see your verifications' },
+                                        ].map(item => (
+                                            <View key={item.key} style={styles.prefRow}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.prefTitle}>{item.title}</Text>
+                                                    <Text style={styles.prefSub}>{item.sub}</Text>
+                                                </View>
+                                                <Switch
+                                                    value={profile?.privacy_settings?.[item.key] ?? false}
+                                                    onValueChange={(val) => handleUpdatePrefs(item.key, val, 'privacy')}
+                                                    trackColor={{ false: COLORS.border, true: COLORS.primary }}
+                                                />
+                                            </View>
+                                        ))}
+                                    </View>
+                                )}
+                            </ScrollView>
+
+                            <TouchableOpacity style={styles.closeBtn} onPress={() => setEditModalVisible(false)}>
+                                <Text style={styles.closeBtnText}>Close</Text>
+                            </TouchableOpacity>
                         </View>
-
-                        {activeModal === 'info' && (
-                            <View style={styles.modalBody}>
-                                <Text style={styles.modalLabel}>Full Name</Text>
-                                <TextInput
-                                    style={styles.modalInput}
-                                    value={editName}
-                                    onChangeText={setEditName}
-                                    placeholder="Enter your name"
-                                />
-                                <Text style={styles.modalLabel}>Location</Text>
-                                <TextInput
-                                    style={styles.modalInput}
-                                    value={editLocation}
-                                    onChangeText={setEditLocation}
-                                    placeholder="Your primary location"
-                                />
-                                <Text style={styles.modalLabel}>Bio</Text>
-                                <TextInput
-                                    style={[styles.modalInput, { height: 100, textAlignVertical: 'top', paddingTop: 12 }]}
-                                    value={editBio}
-                                    onChangeText={setEditBio}
-                                    multiline
-                                    placeholder="Tell us about yourself..."
-                                />
-                                <TouchableOpacity
-                                    style={styles.saveBtn}
-                                    onPress={handleUpdateProfile}
-                                    disabled={saving}
-                                >
-                                    {saving ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.saveBtnText}>Save Changes</Text>}
-                                </TouchableOpacity>
-                            </View>
-                        )}
-
-                        {activeModal === 'notifications' && (
-                            <View style={styles.modalBody}>
-                                {[
-                                    { key: 'push', title: 'Push Notifications', sub: 'Instant emergency alerts' },
-                                    { key: 'email', title: 'Email Reports', sub: 'Weekly summaries of incidents' },
-                                    { key: 'emergency', title: 'Critical Alerts', sub: 'Priority security warnings' },
-                                ].map(item => (
-                                    <View key={item.key} style={styles.prefRow}>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.prefTitle}>{item.title}</Text>
-                                            <Text style={styles.prefSub}>{item.sub}</Text>
-                                        </View>
-                                        <Switch
-                                            value={profile?.notification_prefs?.[item.key] ?? true}
-                                            onValueChange={(val) => handleUpdatePrefs(item.key, val, 'notifications')}
-                                            trackColor={{ false: COLORS.border, true: COLORS.primary }}
-                                        />
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-
-                        {activeModal === 'privacy' && (
-                            <View style={styles.modalBody}>
-                                {[
-                                    { key: 'anonymous_reporting', title: 'Anonymous by Default', sub: 'Keep your identity hidden' },
-                                    { key: 'show_activity', title: 'Show My Activity', sub: 'Allow others to see your verifications' },
-                                ].map(item => (
-                                    <View key={item.key} style={styles.prefRow}>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.prefTitle}>{item.title}</Text>
-                                            <Text style={styles.prefSub}>{item.sub}</Text>
-                                        </View>
-                                        <Switch
-                                            value={profile?.privacy_settings?.[item.key] ?? false}
-                                            onValueChange={(val) => handleUpdatePrefs(item.key, val, 'privacy')}
-                                            trackColor={{ false: COLORS.border, true: COLORS.primary }}
-                                        />
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-
-                        <TouchableOpacity style={styles.closeBtn} onPress={() => setEditModalVisible(false)}>
-                            <Text style={styles.closeBtnText}>Close</Text>
-                        </TouchableOpacity>
                     </View>
-                </View>
+                </KeyboardAvoidingView>
             </Modal>
         </View>
     );
@@ -435,7 +613,8 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
-    headerGradient: { borderBottomLeftRadius: 40, borderBottomRightRadius: 40, paddingBottom: 30, ...SHADOWS.premium },
+    row: { flexDirection: 'row', alignItems: 'center' },
+    headerGradient: { borderBottomLeftRadius: 44, borderBottomRightRadius: 44, paddingBottom: 40, ...SHADOWS.premium },
     headerContent: { paddingHorizontal: SPACING.lg },
     profileRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20 },
     imageContainer: { width: 80, height: 80, borderRadius: 40, position: 'relative' },
@@ -444,14 +623,15 @@ const styles = StyleSheet.create({
     nameContainer: { marginLeft: 20 },
     name: { fontSize: 24, fontWeight: '900', color: COLORS.white },
     rank: { fontSize: 13, color: 'rgba(255,255,255,0.7)', fontWeight: '600', marginTop: 4 },
-    statsOverview: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.15)', marginTop: 30, borderRadius: 20, padding: 20, justifyContent: 'space-around', alignItems: 'center' },
+    statsOverview: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.15)', marginTop: 40, borderRadius: 24, padding: 24, justifyContent: 'space-around', alignItems: 'center' },
     statBox: { alignItems: 'center' },
     scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     statNumber: { fontSize: 20, fontWeight: '800', color: COLORS.white },
+    statSkeleton: { width: 30, height: 24, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 4, marginBottom: 2 },
     statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '700', marginTop: 4 },
     statDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.2)' },
-    content: { padding: SPACING.lg },
-    sectionTitle: { fontSize: 18, fontWeight: '800', color: COLORS.black, marginBottom: 16, marginTop: 10 },
+    content: { padding: SPACING.lg, paddingBottom: 40 },
+    sectionTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, marginBottom: 20, marginTop: 12 },
     achievementScroll: { gap: 12, paddingBottom: 20 },
     achievementCard: { width: 110, backgroundColor: COLORS.white, padding: 16, borderRadius: 24, alignItems: 'center', ...SHADOWS.soft },
     achievementIcon: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
@@ -461,25 +641,34 @@ const styles = StyleSheet.create({
     menuItem: { flexDirection: 'row', alignItems: 'center', padding: 16 },
     menuIconContainer: { width: 44, height: 44, borderRadius: 14, backgroundColor: COLORS.primary + '10', justifyContent: 'center', alignItems: 'center' },
     menuTextContainer: { flex: 1, marginLeft: 16 },
-    menuTitle: { fontSize: 16, fontWeight: '700', color: COLORS.black },
-    menuSubtitle: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
+    menuTitle: { fontSize: 17, fontWeight: '800', color: COLORS.black },
+    menuSubtitle: { fontSize: 13, color: COLORS.textSecondary, marginTop: 4, lineHeight: 18 },
     divider: { height: 1, backgroundColor: COLORS.background, marginLeft: 72 },
     logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, height: 60, borderRadius: 20, backgroundColor: COLORS.error + '10', marginTop: 10 },
     logoutText: { fontSize: 16, fontWeight: '800', color: COLORS.error },
     versionText: { textAlign: 'center', marginTop: 32, fontSize: 12, color: COLORS.textMuted, fontWeight: '600' },
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: COLORS.white, borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24 },
-    modalHeader: { alignItems: 'center', marginBottom: 24 },
-    modalHandle: { width: 40, height: 5, backgroundColor: COLORS.border, borderRadius: 3, marginBottom: 12 },
-    modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.black },
-    modalBody: { gap: 16 },
-    modalLabel: { fontSize: 14, fontWeight: '700', color: COLORS.textSecondary, marginBottom: -8 },
-    modalInput: { backgroundColor: COLORS.background, borderRadius: 16, padding: 16, fontSize: 16, color: COLORS.black, borderWidth: 1, borderColor: COLORS.border },
-    saveBtn: { backgroundColor: COLORS.primary, height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 8 },
-    saveBtnText: { color: COLORS.white, fontSize: 16, fontWeight: '800' },
-    closeBtn: { marginTop: 16, alignItems: 'center' },
-    closeBtnText: { color: COLORS.textMuted, fontWeight: '700' },
-    prefRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.background, padding: 16, borderRadius: 16 },
-    prefTitle: { fontSize: 16, fontWeight: '700', color: COLORS.black },
-    prefSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
+    modalCloseOverlay: { ...StyleSheet.absoluteFillObject },
+    modalContent: {
+        backgroundColor: COLORS.white,
+        borderTopLeftRadius: 36,
+        borderTopRightRadius: 36,
+        width: '100%',
+        ...SHADOWS.premium
+    },
+    modalHeader: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8, alignItems: 'center' },
+    modalHandle: { width: 44, height: 5, backgroundColor: COLORS.border, borderRadius: 3, marginBottom: 16 },
+    modalTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, textAlign: 'center' },
+    modalScrollContent: { paddingHorizontal: 24, paddingBottom: 40 },
+    modalBody: { gap: 24 },
+    inputGroup: { gap: 8 },
+    modalLabel: { fontSize: 13, fontWeight: '800', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginLeft: 4 },
+    modalInput: { backgroundColor: '#F8F9FA', borderRadius: 18, padding: 18, fontSize: 16, color: COLORS.black, borderWidth: 1.5, borderColor: '#E9ECEF' },
+    saveBtn: { backgroundColor: COLORS.primary, height: 64, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginTop: 12, ...SHADOWS.premium },
+    saveBtnText: { color: COLORS.white, fontSize: 18, fontWeight: '900' },
+    closeBtn: { paddingVertical: 16, alignItems: 'center' },
+    closeBtnText: { color: COLORS.textMuted, fontWeight: '700', fontSize: 16 },
+    prefRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F9FA', padding: 20, borderRadius: 22, marginBottom: 12 },
+    prefTitle: { fontSize: 16, fontWeight: '800', color: COLORS.black },
+    prefSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 4, lineHeight: 16 },
 });

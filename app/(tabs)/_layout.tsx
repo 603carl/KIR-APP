@@ -1,9 +1,11 @@
 import { BORDER_RADIUS, COLORS, SHADOWS } from '@/constants/Theme';
+import { supabase } from '@/lib/supabase';
 import * as Haptics from 'expo-haptics';
 import { Tabs } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { Bell, FileText, Home, Plus, User } from 'lucide-react-native';
-import React from 'react';
-import { Platform, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CustomTabBarButton = ({ children, onPress }: any) => (
@@ -21,8 +23,74 @@ const CustomTabBarButton = ({ children, onPress }: any) => (
   </TouchableOpacity>
 );
 
+// Custom Bell Icon with Badge
+const BellWithBadge = ({ color, unreadCount }: { color: string; unreadCount: number }) => (
+  <View style={{ position: 'relative' }}>
+    <Bell color={color} size={24} />
+    {unreadCount > 0 && (
+      <View style={styles.badge}>
+        <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+      </View>
+    )}
+  </View>
+);
+
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    fetchUnreadCount();
+
+    // Real-time subscription for notifications
+    const subscription = supabase
+      .channel('unread_notifications')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
+        fetchUnreadCount();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
+        fetchUnreadCount();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, []);
+
+  const fetchUnreadCount = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Get acknowledged broadcast IDs from local storage
+      let acknowledgedIds: string[] = [];
+      try {
+        const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
+        if (stored) acknowledgedIds = JSON.parse(stored);
+      } catch (e) { }
+
+      // Count unread personal notifications
+      const { count: personalCount } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+
+      // Count unacknowledged broadcasts
+      const { data: broadcasts } = await supabase
+        .from('broadcasts')
+        .select('id');
+
+      const unacknowledgedBroadcasts = (broadcasts || []).filter(
+        b => !acknowledgedIds.includes(b.id)
+      ).length;
+
+      setUnreadCount((personalCount || 0) + unacknowledgedBroadcasts);
+    } catch (error) {
+      console.error('Error fetching unread count:', error);
+    }
+  };
 
   return (
     <Tabs
@@ -34,10 +102,10 @@ export default function TabLayout() {
         tabBarLabelStyle: styles.tabBarLabel,
         tabBarStyle: {
           position: 'absolute',
-          bottom: Platform.OS === 'ios' ? Math.max(insets.bottom, 15) : 0,
+          bottom: Math.max(insets.bottom, 12) + 2,
           left: 16,
           right: 16,
-          height: 68,
+          height: 64,
           borderRadius: BORDER_RADIUS.xxl,
           backgroundColor: COLORS.white,
           borderTopWidth: 0,
@@ -50,10 +118,10 @@ export default function TabLayout() {
           <View
             style={{
               position: 'absolute',
-              bottom: -insets.bottom - 20,
+              bottom: -(Math.max(insets.bottom, 12) + 20),
               left: -20,
               right: -20,
-              height: insets.bottom + 100,
+              height: Math.max(insets.bottom, 12) + 100,
               backgroundColor: COLORS.white,
             }}
           />
@@ -84,7 +152,7 @@ export default function TabLayout() {
         name="alerts"
         options={{
           title: 'Alerts',
-          tabBarIcon: ({ color }) => <Bell color={color} size={24} />,
+          tabBarIcon: ({ color }) => <BellWithBadge color={color} unreadCount={unreadCount} />,
         }}
       />
       <Tabs.Screen
@@ -119,5 +187,24 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     marginTop: 2,
+  },
+  badge: {
+    position: 'absolute',
+    top: -6,
+    right: -10,
+    backgroundColor: COLORS.error,
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: COLORS.white,
+  },
+  badgeText: {
+    color: COLORS.white,
+    fontSize: 10,
+    fontWeight: '900',
   },
 });

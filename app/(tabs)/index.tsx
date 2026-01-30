@@ -1,15 +1,16 @@
+import { BroadcastAlert, EmergencyBroadcastOverlay } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
-import { BlurView } from 'expo-blur';
+import { normalizeCounty } from '@/lib/utils';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import {
   AlertCircle,
   ChevronRight,
   Droplet,
-  Map as MapIcon,
   Search,
   ShieldCheck,
   TrendingUp,
@@ -17,8 +18,8 @@ import {
   Zap
 } from 'lucide-react-native';
 import { MotiView } from 'moti';
-import React, { useEffect, useState } from 'react';
-import { Dimensions, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Dimensions, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -38,6 +39,7 @@ interface Incident {
   created_at: string;
   severity: string;
   category: string;
+  status: string;
   media_urls: string[];
 }
 
@@ -51,11 +53,23 @@ export default function DashboardScreen() {
   const [userLocation, setUserLocation] = useState<Location.LocationObject | null>(null);
   const [stats, setStats] = useState({ resolvedRate: '0%', trend: '+0%' });
   const [userName, setUserName] = useState('Citizen');
+  const [sosActive, setSosActive] = useState(false);
+  const [activeBroadcast, setActiveBroadcast] = useState<BroadcastAlert | null>(null);
+  const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
 
+  // Performance: Cache user to avoid repeated auth calls
+  const cachedUser = useRef<any>(null);
+  const isRequestingLocation = useRef(false);
+
+  // 1. Initial mounting tasks - OPTIMIZED with parallel loading
   useEffect(() => {
-    fetchIncidents();
-    fetchStats();
-    fetchUser();
+    // Load all initial data in parallel for faster startup
+    Promise.all([
+      fetchUser(),
+      fetchStats(),
+      checkLocationPermission(),
+      loadAcknowledgedIds()
+    ]);
 
     const subscription = supabase
       .channel('public:incidents')
@@ -65,31 +79,105 @@ export default function DashboardScreen() {
       })
       .subscribe();
 
+    const broadcastSubscription = supabase
+      .channel('public:broadcasts')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
+        handleNewBroadcast(payload.new as BroadcastAlert);
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(subscription);
+      supabase.removeChannel(broadcastSubscription);
     };
-  }, [searchQuery, selectedCategory]);
+  }, []);
+
+  // 2. Fetch incidents when query/category/location changes
+  useEffect(() => {
+    fetchIncidents();
+  }, [searchQuery, selectedCategory, userLocation]);
 
   const fetchUser = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.user_metadata?.full_name) {
-      setUserName(user.user_metadata.full_name.split(' ')[0]);
+    if (!user) return;
+
+    // Cache user for reuse in SOS and other functions
+    cachedUser.current = user;
+
+    // Fetch from profiles table for the correct name
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', user.id)
+      .single();
+
+    if (profile?.full_name) {
+      setUserName(profile.full_name.split(' ')[0]);
     }
   };
 
   const fetchStats = async () => {
     try {
       const { count: total } = await supabase.from('incidents').select('*', { count: 'exact', head: true });
-      const { count: resolved } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('status', 'Resolved');
+      const { count: resolved } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).in('status', ['Resolved', 'Closed', 'resolved', 'closed']);
 
       if (total && total > 0) {
         setStats({
           resolvedRate: `${((resolved || 0) / total * 100).toFixed(1)}%`,
-          trend: '+2.4%' // Mock trend for now
+          trend: '+2.4%'
         });
       }
     } catch (e) {
       console.error('Stats error:', e);
+    }
+  };
+
+  const loadAcknowledgedIds = async () => {
+    try {
+      const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
+      if (stored) {
+        setAcknowledgedIds(JSON.parse(stored));
+      }
+    } catch (e) {
+      console.error('SecureStore error:', e);
+    }
+  };
+
+
+  const handleNewBroadcast = (broadcast: BroadcastAlert) => {
+    // If it's already acknowledged, don't show it
+    if (acknowledgedIds.includes(broadcast.id)) return;
+    setActiveBroadcast(broadcast);
+  };
+
+  const handleAcknowledgeBroadcast = async (id: string) => {
+    const updatedIds = [...acknowledgedIds, id];
+    setAcknowledgedIds(updatedIds);
+    await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
+    setActiveBroadcast(null);
+  };
+
+  const checkLocationPermission = async () => {
+    if (isRequestingLocation.current) return;
+    isRequestingLocation.current = true;
+
+    try {
+      const { status: currentStatus } = await Location.getForegroundPermissionsAsync();
+      let finalStatus = currentStatus;
+
+      if (currentStatus !== 'granted') {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        finalStatus = status;
+      }
+
+      if (finalStatus === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setUserLocation(loc);
+      }
+    } catch (e) {
+      console.log('Location check failed', e);
+    } finally {
+      isRequestingLocation.current = false;
     }
   };
 
@@ -98,22 +186,8 @@ export default function DashboardScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Optional location logic
-      let lat = null;
-      let lng = null;
-
-      if (!userLocation) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLocation(loc);
-          lat = loc.coords.latitude;
-          lng = loc.coords.longitude;
-        }
-      } else {
-        lat = userLocation.coords.latitude;
-        lng = userLocation.coords.longitude;
-      }
+      const lat = userLocation?.coords.latitude || null;
+      const lng = userLocation?.coords.longitude || null;
 
       const { data, error } = await supabase
         .rpc('get_smart_community_feed', {
@@ -125,7 +199,7 @@ export default function DashboardScreen() {
         });
 
       if (error) throw error;
-      if (data) setIncidents(data);
+      setIncidents(data || []);
     } catch (error) {
       console.error('Smart Feed error:', error);
     } finally {
@@ -133,6 +207,12 @@ export default function DashboardScreen() {
       setRefreshing(false);
     }
   };
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchIncidents();
+    fetchStats();
+  }, [userLocation, searchQuery, selectedCategory]);
 
   const getTimeAgo = (dateString: string) => {
     const now = new Date();
@@ -146,11 +226,139 @@ export default function DashboardScreen() {
     return past.toLocaleDateString();
   };
 
+  const handleSOS = async () => {
+    if (sosActive) {
+      Alert.alert(
+        'Cancel SOS?',
+        'Are you sure you want to cancel this emergency alert? Only do this if you are safe.',
+        [
+          { text: 'Keep Active', style: 'cancel' },
+          {
+            text: 'Cancel SOS',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                  await supabase
+                    .from('sos_alerts')
+                    .update({ status: 'cancelled' })
+                    .eq('user_id', user.id)
+                    .eq('status', 'active');
+                }
+                setSosActive(false);
+                Alert.alert('SOS Cancelled', 'Your emergency alert has been cancelled.');
+              } catch (e) {
+                console.error('Cancel SOS error:', e);
+                setSosActive(false); // UI fallback
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+
+    // INSTANT UI FEEDBACK - Activate immediately before any async work
+    setSosActive(true);
+
+    try {
+      // Use cached user for speed, fallback to fresh fetch
+      let user = cachedUser.current;
+      if (!user) {
+        const { data } = await supabase.auth.getUser();
+        user = data.user;
+      }
+
+      if (!user) {
+        setSosActive(false);
+        Alert.alert('Authentication Required', 'Please log in to use SOS feature.');
+        return;
+      }
+
+      // Use cached location if available for instant response, fetch fresh in background
+      let lat = userLocation?.coords.latitude;
+      let lng = userLocation?.coords.longitude;
+
+      if (!lat || !lng) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setSosActive(false);
+          Alert.alert('Location Required', 'SOS needs your location to send help.');
+          return;
+        }
+        const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        lat = location.coords.latitude;
+        lng = location.coords.longitude;
+      }
+
+      let locationName = 'Unknown Location';
+
+      // Insert SOS alert immediately with coordinates (fast path)
+      const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
+        user_id: user.id,
+        lat,
+        lng,
+        location_name: 'Locating...',
+        status: 'active'
+      }).select().single();
+
+      if (sosError) throw sosError;
+
+      // Enrich with location details in background
+      Location.reverseGeocodeAsync({ latitude: lat, longitude: lng })
+        .then(async (results) => {
+          if (results && results[0]) {
+            const loc = results[0];
+            const resolvedAddress = [loc.street, loc.district, loc.city].filter(Boolean).join(', ');
+            const county = normalizeCounty(loc.region || loc.city || '');
+            const subCounty = loc.subregion || loc.district || '';
+
+            await supabase.from('sos_alerts').update({
+              location_name: resolvedAddress,
+              county: county,
+              sub_county: subCounty
+            }).eq('id', sosData.id);
+          }
+        })
+        .catch(err => console.error('Geocoding error:', err));
+
+      if (sosError) throw sosError;
+
+      // Create watch command alert in background (don't block UI)
+      (async () => {
+        try {
+          await supabase.from('alerts').insert({
+            rule_name: 'SOS Emergency',
+            message: `EMERGENCY SOS from user at ${locationName} (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
+            severity: 'critical',
+            acknowledged: false,
+            user_id: user.id,
+            sos_alert_id: sosData.id
+          });
+        } catch (e) { /* Background task, ignore errors */ }
+      })();
+
+      Alert.alert('SOS Sent', 'Emergency services have been notified. Stay calm, help is on the way.');
+
+    } catch (error: any) {
+      console.error('SOS Error:', error);
+      setSosActive(false);
+      Alert.alert('SOS Failed', error.message || 'Could not send SOS. Please try again or call emergency services directly.');
+    }
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scroll}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
+          }
+        >
 
           {/* Header */}
           <View style={styles.header}>
@@ -201,24 +409,49 @@ export default function DashboardScreen() {
             </LinearGradient>
           </View>
 
-          {/* Map View Toggle */}
-          <TouchableOpacity
-            style={styles.mapButton}
-            onPress={() => router.push('/map')}
+          {/* SOS Emergency Button */}
+          <MotiView
+            from={{ scale: sosActive ? 1 : 0.95 }}
+            animate={{ scale: sosActive ? [1, 1.05, 1] : 1 }}
+            transition={{ loop: sosActive, type: 'timing', duration: 500 }}
           >
-            <BlurView intensity={80} tint="light" style={styles.mapBlur}>
-              <View style={styles.mapBtnContent}>
-                <View style={styles.mapBtnTextContainer}>
-                  <MapIcon color={COLORS.primary} size={24} />
-                  <View style={{ marginLeft: 12 }}>
-                    <Text style={styles.mapBtnTitle}>Interactive Map</Text>
-                    <Text style={styles.mapBtnSub}>View real-time incidents nearby</Text>
+            <TouchableOpacity
+              style={[
+                styles.sosButton,
+                sosActive && styles.sosButtonActive
+              ]}
+              onPress={handleSOS}
+              activeOpacity={0.8}
+            >
+              <LinearGradient
+                colors={sosActive ? ['#DC2626', '#991B1B'] : ['#EF4444', '#DC2626']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.sosGradient}
+              >
+                <View style={styles.sosContent}>
+                  <View style={styles.sosIconContainer}>
+                    <AlertCircle color={COLORS.white} size={32} />
                   </View>
+                  <View style={styles.sosTextContainer}>
+                    <Text style={styles.sosTitle}>{sosActive ? 'SOS ACTIVE' : 'SOS Emergency'}</Text>
+                    <Text style={styles.sosSub}>{sosActive ? 'Help is on the way...' : 'Tap for immediate assistance'}</Text>
+                  </View>
+                  {sosActive && (
+                    <MotiView
+                      from={{ opacity: 0.5 }}
+                      animate={{ opacity: [0.5, 1, 0.5] }}
+                      transition={{ loop: true, type: 'timing', duration: 800 }}
+                      style={styles.sosLiveIndicator}
+                    >
+                      <View style={styles.sosLiveDot} />
+                      <Text style={styles.sosLiveText}>LIVE</Text>
+                    </MotiView>
+                  )}
                 </View>
-                <ChevronRight color={COLORS.textMuted} size={20} />
-              </View>
-            </BlurView>
-          </TouchableOpacity>
+              </LinearGradient>
+            </TouchableOpacity>
+          </MotiView>
 
           {/* Quick Categories */}
           <View style={styles.sectionHeader}>
@@ -290,9 +523,9 @@ export default function DashboardScreen() {
                 <View style={styles.incidentContent}>
                   <View style={styles.incidentHeader}>
                     <Text style={styles.incidentTitle}>{item.title}</Text>
-                    <View style={[styles.statusBadge, { backgroundColor: (item.severity === 'High' || item.severity === 'Critical') ? COLORS.error + '20' : COLORS.warning + '20' }]}>
-                      <View style={[styles.statusDot, { backgroundColor: (item.severity === 'High' || item.severity === 'Critical') ? COLORS.error : COLORS.warning }]} />
-                      <Text style={[styles.statusText, { color: (item.severity === 'High' || item.severity === 'Critical') ? COLORS.error : COLORS.warning }]}>{item.severity}</Text>
+                    <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}>
+                      <View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} />
+                      <Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Pending'}</Text>
                     </View>
                   </View>
                   <Text style={styles.incidentLoc}>{item.location_name} • {getTimeAgo(item.created_at)}</Text>
@@ -315,6 +548,10 @@ export default function DashboardScreen() {
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
+      <EmergencyBroadcastOverlay
+        alert={activeBroadcast}
+        onAcknowledge={handleAcknowledgeBroadcast}
+      />
     </View>
   );
 }
@@ -337,12 +574,17 @@ const styles = StyleSheet.create({
   statsLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 14, fontWeight: '600' },
   statsValue: { color: COLORS.white, fontSize: 36, fontWeight: '900' },
   statsTrend: { color: COLORS.success, fontSize: 13, fontWeight: '700', marginTop: 4 },
-  mapButton: { marginBottom: SPACING.lg, borderRadius: BORDER_RADIUS.xl, overflow: 'hidden', ...SHADOWS.medium },
-  mapBlur: { padding: SPACING.md },
-  mapBtnContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  mapBtnTextContainer: { flexDirection: 'row', alignItems: 'center' },
-  mapBtnTitle: { fontSize: 17, fontWeight: '700', color: COLORS.black },
-  mapBtnSub: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  sosButton: { marginBottom: SPACING.lg, borderRadius: BORDER_RADIUS.xl, overflow: 'hidden', ...SHADOWS.medium },
+  sosButtonActive: { ...SHADOWS.premium, transform: [{ scale: 1.02 }] },
+  sosGradient: { padding: SPACING.lg },
+  sosContent: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  sosIconContainer: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
+  sosTextContainer: { flex: 1 },
+  sosTitle: { fontSize: 20, fontWeight: '900', color: COLORS.white },
+  sosSub: { fontSize: 13, color: 'rgba(255,255,255,0.8)', fontWeight: '600', marginTop: 2 },
+  sosLiveIndicator: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, gap: 6 },
+  sosLiveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFD700' },
+  sosLiveText: { fontSize: 10, fontWeight: '900', color: COLORS.white, letterSpacing: 1 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: SPACING.md, marginTop: SPACING.md },
   sectionTitle: { fontSize: 19, fontWeight: '800', color: COLORS.black },
   aiBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.primary + '15', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, marginTop: 4 },

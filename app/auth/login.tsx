@@ -4,13 +4,21 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ArrowRight, Github, Lock, Mail } from 'lucide-react-native';
+import { ArrowRight, Lock, Mail } from 'lucide-react-native';
 import { MotiView } from 'moti';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width, height } = Dimensions.get('window');
+
+// console.log('[DEBUG] Evaluating app/auth/login.tsx');
+
+// Safety check for native module availability
+const hasGoogleNative = false;
+
+// Dynamically require GoogleSignin only if native module exists to prevent crash on import
+let GoogleSignin: any = null;
 
 export default function LoginScreen() {
     const router = useRouter();
@@ -19,6 +27,13 @@ export default function LoginScreen() {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
+    useEffect(() => {
+    }, []);
+
+    const handleGoogleSignIn = async () => {
+        Alert.alert('Temporary Disable', 'Google Sign-In is temporarily disabled for debugging.');
+    };
+
     const handleLogin = async () => {
         if (!email || !password) {
             Alert.alert('Error', 'Please fill in all fields');
@@ -26,19 +41,33 @@ export default function LoginScreen() {
         }
 
         setLoading(true);
-        console.log('Target Project:', process.env.EXPO_PUBLIC_SUPABASE_URL);
-        console.log('Attempting login with:', { email: email.trim(), passwordLength: password.length });
         const { data, error } = await supabase.auth.signInWithPassword({
-            email: email.trim(),
-            password,
+            email: email.trim().toLowerCase(),
+            password: password.trim(),
         });
 
         if (error) {
-            console.error('Login Error Full:', JSON.stringify(error, null, 2));
-            Alert.alert('Error', error.message);
             setLoading(false);
+
+            // Provide better error messages
+            if (error.message.includes('Invalid login credentials')) {
+                Alert.alert(
+                    'Login Failed',
+                    'The email or password you entered is incorrect. Please check your credentials and try again.',
+                    [
+                        { text: 'Try Again', style: 'cancel' },
+                        {
+                            text: 'Reset Password',
+                            onPress: () => router.push('/auth/forgot-password')
+                        }
+                    ]
+                );
+            } else if (error.message.includes('Email not confirmed')) {
+                Alert.alert('Email Not Verified', 'Please check your email and click the verification link before signing in.');
+            } else {
+                Alert.alert('Error', error.message);
+            }
         } else {
-            console.log('Login Success:', data.user?.id);
             router.replace('/(tabs)');
         }
     };
@@ -149,8 +178,11 @@ export default function LoginScreen() {
                                 <View style={styles.line} />
                             </View>
 
-                            <TouchableOpacity style={styles.socialBtn}>
-                                <Github size={20} color={COLORS.white} />
+                            <TouchableOpacity
+                                style={[styles.socialBtn, loading && { opacity: 0.7 }]}
+                                onPress={handleGoogleSignIn}
+                                disabled={loading}
+                            >
                                 <Text style={styles.socialText}>Verify with Google</Text>
                             </TouchableOpacity>
 

@@ -1,6 +1,7 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import { ArrowRight } from 'lucide-react-native';
 import { MotiView } from 'moti';
@@ -35,13 +36,38 @@ export default function OnboardingScreen() {
     const [currentIndex, setCurrentIndex] = useState(0);
     const flatListRef = useRef<FlatList>(null);
     const router = useRouter();
+    const timerRef = useRef<any>(null);
 
-    const handleNext = () => {
+    const startTimer = () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => {
+            if (currentIndex < SLIDES.length - 1) {
+                flatListRef.current?.scrollToIndex({ index: currentIndex + 1, animated: true });
+            } else {
+                handleSkip(); // Auto-finish if at end
+            }
+        }, 4000); // 4 seconds per slide
+    };
+
+    React.useEffect(() => {
+        startTimer();
+        return () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+        };
+    }, [currentIndex]);
+
+    const handleNext = async () => {
         if (currentIndex < SLIDES.length - 1) {
             flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
         } else {
+            await SecureStore.setItemAsync('hasSeenOnboarding', 'true');
             router.replace('/auth/login');
         }
+    };
+
+    const handleSkip = async () => {
+        await SecureStore.setItemAsync('hasSeenOnboarding', 'true');
+        router.replace('/auth/login');
     };
 
     return (
@@ -50,7 +76,7 @@ export default function OnboardingScreen() {
             <StatusBar style="dark" />
 
             <SafeAreaView style={styles.safe}>
-                <TouchableOpacity style={styles.skipBtn} onPress={() => router.replace('/auth/login')}>
+                <TouchableOpacity style={styles.skipBtn} onPress={handleSkip}>
                     <Text style={styles.skipText}>Skip</Text>
                 </TouchableOpacity>
 

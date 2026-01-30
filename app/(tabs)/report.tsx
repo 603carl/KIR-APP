@@ -1,7 +1,9 @@
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
+import { normalizeCounty } from '@/lib/utils';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ExpoLocation from 'expo-location';
 import { useRouter } from 'expo-router';
 import {
     AlertCircle,
@@ -14,7 +16,6 @@ import {
     HeartPulse,
     LocateFixed,
     MapPin,
-    Search,
     Shield,
     Truck,
     Zap
@@ -46,8 +47,12 @@ export default function ReportScreen() {
     const [mediaItems, setMediaItems] = useState<{ uri: string; type: 'image' | 'video' }[]>([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
-    const [locationName, setLocationName] = useState('Hurlingham, Nairobi, Kenya');
+    const [locationMethod, setLocationMethod] = useState<'gps' | 'landmark' | null>(null);
+    const [locationName, setLocationName] = useState('');
+    const [landmarkName, setLandmarkName] = useState('');
     const [coords, setCoords] = useState({ lat: -1.2921, lng: 36.8219 });
+    const [county, setCounty] = useState('');
+    const [subCounty, setSubCounty] = useState('');
     const [locationConfirmed, setLocationConfirmed] = useState(false);
     const [isAnonymous, setIsAnonymous] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -128,7 +133,26 @@ export default function ReportScreen() {
             }
             setUploadProgress(90);
 
-            // 2. Insert Incident
+            // 2. Fetch user's home county as fallback if needed
+            let finalCounty = county;
+            let finalSubCounty = subCounty;
+
+            if (!finalCounty) {
+                console.log('No county detected from current location, fetching user home county...');
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('county')
+                    .eq('id', user?.id)
+                    .single();
+
+                if (profile?.county) {
+                    finalCounty = profile.county;
+                    console.log('Using fallback home county:', finalCounty);
+                }
+            }
+
+            // 3. Insert Incident
+            const locationValue = locationName?.trim() || 'Unknown Location';
             const { error } = await supabase
                 .from('incidents')
                 .insert([
@@ -138,10 +162,12 @@ export default function ReportScreen() {
                         description,
                         severity,
                         category: getCategoryTitle(),
-                        location: locationName, // Mapped to required 'location' column
-                        location_name: locationName,
-                        lat: coords.lat,
-                        lng: coords.lng,
+                        location: locationMethod === 'gps' ? locationName : landmarkName,
+                        location_name: locationMethod === 'gps' ? locationName : landmarkName,
+                        lat: coords.lat || -1.2921,
+                        lng: coords.lng || 36.8219,
+                        county: finalCounty || 'Nairobi City', // Ultimate fallback to capital if everything fails
+                        sub_county: finalSubCounty || null,
                         anonymity: isAnonymous,
                         media_urls: uploadedUrls,
                         status: 'Pending'
@@ -279,55 +305,127 @@ export default function ReportScreen() {
             case 2:
                 return (
                     <MotiView from={{ opacity: 0, translateX: 20 }} animate={{ opacity: 1, translateX: 0 }} style={styles.stepContainer}>
-                        <Text style={styles.stepTitle}>Pin Location</Text>
-                        <Text style={styles.stepSub}>Search or drag the pin to the exact location.</Text>
+                        <Text style={styles.stepTitle}>Incident Location</Text>
+                        <Text style={styles.stepSub}>How should we mark the location of this incident?</Text>
 
-                        <View style={styles.searchBar}>
-                            <Search size={20} color={COLORS.textMuted} />
-                            <TextInput
-                                placeholder="Search for a place or street..."
-                                style={styles.searchInput}
-                                placeholderTextColor={COLORS.textMuted}
-                                value={locationName}
-                                onChangeText={setLocationName}
-                            />
-                        </View>
+                        {!locationMethod ? (
+                            <View style={styles.methodGrid}>
+                                <TouchableOpacity
+                                    style={styles.methodCard}
+                                    onPress={async () => {
+                                        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+                                        if (status === 'granted') {
+                                            const currentLoc = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.High });
+                                            setCoords({ lat: currentLoc.coords.latitude, lng: currentLoc.coords.longitude });
+                                            setLocationMethod('gps');
+                                            // Reverse geocode to get location name, county, and sub-county
+                                            const rev = await ExpoLocation.reverseGeocodeAsync(currentLoc.coords);
+                                            if (rev?.[0]) {
+                                                const loc = rev[0];
+                                                // Build location name
+                                                setLocationName(`${loc.name || ''} ${loc.street || ''}, ${loc.city || ''}`.trim());
 
-                        <View style={styles.mapPlaceholder}>
-                            <LinearGradient colors={['#E1E4E8', '#F0F2F5']} style={styles.placeholderGradient}>
-                                <View style={styles.mapPinShadow} />
-                                <MotiView
-                                    from={{ translateY: -20 }}
-                                    animate={{ translateY: 0 }}
-                                    transition={{ type: 'spring', loop: true }}
-                                    style={styles.floatingPin}
+                                                // Extract county (region in Kenya geocoding)
+                                                // In Kenya: region = County, subregion = Sub-county/Constituency
+                                                const rawCounty = loc.region || loc.city || '';
+                                                const countyName = normalizeCounty(rawCounty);
+                                                const subCountyName = loc.subregion || loc.district || '';
+
+                                                setCounty(countyName);
+                                                setSubCounty(subCountyName);
+
+                                                console.log('Location extracted:', {
+                                                    locationName: `${loc.name} ${loc.street}, ${loc.city}`,
+                                                    county: countyName,
+                                                    subCounty: subCountyName
+                                                });
+                                            }
+                                        } else {
+                                            Alert.alert('Permission Required', 'GPS requires location access. Please use the Landmark option instead.');
+                                        }
+                                    }}
                                 >
-                                    <MapPin size={48} color={COLORS.primary} fill={COLORS.white} />
-                                </MotiView>
-                                <Text style={styles.placeholderText}>Move map to adjust pin...</Text>
-                            </LinearGradient>
+                                    <View style={[styles.methodIcon, { backgroundColor: COLORS.primary + '15' }]}>
+                                        <LocateFixed size={28} color={COLORS.primary} />
+                                    </View>
+                                    <Text style={styles.methodTitle}>GPS Auto-Pin</Text>
+                                    <Text style={styles.methodDesc}>Pin the exact coordinates of where you are now.</Text>
+                                </TouchableOpacity>
 
-                            <TouchableOpacity style={styles.locateBtn}>
-                                <LocateFixed size={24} color={COLORS.black} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <TouchableOpacity
-                            style={[styles.confirmLocationBtn, locationConfirmed && styles.confirmLocationBtnActive]}
-                            onPress={() => {
-                                setLocationConfirmed(true);
-                                handleNext();
-                            }}
-                        >
-                            <Text style={styles.confirmLocationText}>
-                                {locationConfirmed ? 'Location Set' : 'Confirm This Location'}
-                            </Text>
-                        </TouchableOpacity>
-
-                        <View style={styles.locationInfo}>
-                            <MapPin size={20} color={COLORS.primary} />
-                            <Text style={styles.locationText}>{locationName}</Text>
-                        </View>
+                                <TouchableOpacity
+                                    style={styles.methodCard}
+                                    onPress={() => setLocationMethod('landmark')}
+                                >
+                                    <View style={[styles.methodIcon, { backgroundColor: COLORS.gold + '15' }]}>
+                                        <MapPin size={28} color={COLORS.gold} />
+                                    </View>
+                                    <Text style={styles.methodTitle}>Nearest Landmark</Text>
+                                    <Text style={styles.methodDesc}>Specify a building, street, or common area nearby.</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : locationMethod === 'gps' ? (
+                            <MotiView from={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                                <View style={styles.mapPlaceholder}>
+                                    <LinearGradient colors={['#E1E4E8', '#F0F2F5']} style={styles.placeholderGradient}>
+                                        <View style={styles.mapPinShadow} />
+                                        <MotiView
+                                            from={{ translateY: -20 }}
+                                            animate={{ translateY: 0 }}
+                                            transition={{ type: 'spring', loop: true }}
+                                            style={styles.floatingPin}
+                                        >
+                                            <MapPin size={48} color={COLORS.primary} fill={COLORS.white} />
+                                        </MotiView>
+                                        <Text style={styles.placeholderText}>GPS coordinates captured</Text>
+                                    </LinearGradient>
+                                </View>
+                                <View style={styles.locationInfo}>
+                                    <LocateFixed size={20} color={COLORS.primary} />
+                                    <Text style={styles.locationText}>{locationName || 'Getting address...'}</Text>
+                                </View>
+                                <TouchableOpacity onPress={() => setLocationMethod(null)} style={styles.changeMethodBtn}>
+                                    <Text style={styles.changeMethodText}>Change method</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.confirmLocationBtn, styles.confirmLocationBtnActive]}
+                                    onPress={() => {
+                                        setLocationConfirmed(true);
+                                        handleNext();
+                                    }}
+                                >
+                                    <Text style={styles.confirmLocationText}>Confirm Location</Text>
+                                </TouchableOpacity>
+                            </MotiView>
+                        ) : (
+                            <MotiView from={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                                <View style={styles.inputBox}>
+                                    <TextInput
+                                        placeholder="e.g. Near Westlands Stage, KICC, Uhuru Park"
+                                        style={styles.textInput}
+                                        placeholderTextColor={COLORS.textMuted}
+                                        value={landmarkName}
+                                        onChangeText={setLandmarkName}
+                                        autoFocus
+                                    />
+                                </View>
+                                <Text style={styles.helperText}>Provide as much detail as possible to help responders find the location.</Text>
+                                <TouchableOpacity onPress={() => setLocationMethod(null)} style={styles.changeMethodBtn}>
+                                    <Text style={styles.changeMethodText}>Change to GPS</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.confirmLocationBtn, landmarkName.length > 3 && styles.confirmLocationBtnActive]}
+                                    onPress={() => {
+                                        if (landmarkName.length > 3) {
+                                            setLocationConfirmed(true);
+                                            handleNext();
+                                        }
+                                    }}
+                                    disabled={landmarkName.length <= 3}
+                                >
+                                    <Text style={styles.confirmLocationText}>Use This Landmark</Text>
+                                </TouchableOpacity>
+                            </MotiView>
+                        )}
                     </MotiView>
                 );
             case 3:
@@ -352,7 +450,11 @@ export default function ReportScreen() {
                             </View>
                             <View style={styles.summaryRow}>
                                 <Text style={styles.summaryLabel}>Priority</Text>
-                                <Text style={[styles.summaryValue, { color: COLORS.error }]}>{severity}</Text>
+                                <Text style={[styles.summaryValue, { color: (severity === 'High' || severity === 'Critical') ? COLORS.error : COLORS.warning }]}>{severity}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Location</Text>
+                                <Text style={styles.summaryValue} numberOfLines={1}>{locationMethod === 'gps' ? locationName : landmarkName}</Text>
                             </View>
                             <View style={styles.summaryRow}>
                                 <Text style={styles.summaryLabel}>Anonymity</Text>
@@ -460,6 +562,14 @@ const styles = StyleSheet.create({
     catIconIcon: { width: 56, height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
     catCardTitle: { fontSize: 17, fontWeight: '800', color: COLORS.black, marginLeft: 16 },
     catCardDesc: { fontSize: 12, color: COLORS.textSecondary, marginLeft: 16, marginTop: 4 },
+    methodGrid: { gap: 16 },
+    methodCard: { backgroundColor: COLORS.surfaceVariant, borderRadius: BORDER_RADIUS.xl, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+    methodIcon: { width: 64, height: 64, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+    methodTitle: { fontSize: 18, fontWeight: '800', color: COLORS.black, marginBottom: 4 },
+    methodDesc: { fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 18 },
+    changeMethodBtn: { alignSelf: 'center', marginBottom: 20 },
+    changeMethodText: { fontSize: 14, fontWeight: '700', color: COLORS.primary, textDecorationLine: 'underline' },
+    helperText: { fontSize: 12, color: COLORS.textMuted, marginTop: 12, marginBottom: 20, textAlign: 'center' },
     inputStack: { gap: 16 },
     inputLabel: { fontSize: 14, fontWeight: '700', color: COLORS.textSecondary, marginTop: 8 },
     severityRow: { flexDirection: 'row', gap: 8 },
