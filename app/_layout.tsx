@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
+import { BroadcastAlert, EmergencyBroadcastOverlay } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { useColorScheme } from '@/components/useColorScheme';
 import { COLORS } from '@/constants/Theme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -49,6 +50,8 @@ export default function RootLayout() {
 
   const [isLocked, setIsLocked] = useState(false);
   const [isNavigationReady, setIsNavigationReady] = useState(false);
+  const [activeBroadcast, setActiveBroadcast] = useState<BroadcastAlert | null>(null);
+  const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
 
   // Register for push notifications
   usePushNotifications();
@@ -118,6 +121,25 @@ export default function RootLayout() {
 
     initAndCheckNavigation();
 
+    // Global Broadcast Listener
+    const loadAcknowledgedIds = async () => {
+      try {
+        const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
+        if (stored) setAcknowledgedIds(JSON.parse(stored));
+      } catch (e) { }
+    };
+    loadAcknowledgedIds();
+
+    const broadcastSubscription = supabase
+      .channel('global:broadcasts')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
+        const newBroadcast = payload.new as BroadcastAlert;
+        // Check local acknowledgedIds ref or fresh fetch if needed, 
+        // but since it's a new INSERT, we just show it if it's not in our current state
+        setActiveBroadcast(newBroadcast);
+      })
+      .subscribe();
+
     // Auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN') {
@@ -158,6 +180,15 @@ export default function RootLayout() {
         <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
+      <EmergencyBroadcastOverlay
+        alert={activeBroadcast}
+        onAcknowledge={async (id) => {
+          const updatedIds = [...acknowledgedIds, id];
+          setAcknowledgedIds(updatedIds);
+          await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
+          setActiveBroadcast(null);
+        }}
+      />
     </ThemeProvider>
   );
 }

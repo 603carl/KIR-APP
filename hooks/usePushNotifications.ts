@@ -27,9 +27,11 @@ export function usePushNotifications() {
                 importance: Notifications.AndroidImportance.MAX,
                 vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
                 lightColor: '#FF0000',
-                sound: 'emergency_alert.wav',
+                sound: 'emergency_alert.wav', // Needs to be in android/app/src/main/res/raw
                 bypassDnd: true,
                 lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+                showBadge: true,
+                enableVibrate: true,
             });
         }
 

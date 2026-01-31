@@ -1,9 +1,12 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { BlurView } from 'expo-blur';
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Linking from 'expo-linking';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as WebBrowser from 'expo-web-browser';
 import { ArrowRight, Lock, Mail } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
@@ -12,26 +15,242 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width, height } = Dimensions.get('window');
 
-// console.log('[DEBUG] Evaluating app/auth/login.tsx');
+// Check if we're running in Expo Go or a development/production build
+const isExpoGo = Constants.appOwnership === 'expo';
 
-// Safety check for native module availability
-const hasGoogleNative = false;
+// Configure Google Sign-In for native builds only
+const WEB_CLIENT_ID = '751130763657-6s429sp824lsha2sdqp9ooler427hve2.apps.googleusercontent.com';
 
-// Dynamically require GoogleSignin only if native module exists to prevent crash on import
+// Dynamically import native Google Sign-In (only works in dev/prod builds)
 let GoogleSignin: any = null;
+let statusCodes: any = null;
+
+if (!isExpoGo) {
+    try {
+        const googleSignInModule = require('@react-native-google-signin/google-signin');
+        GoogleSignin = googleSignInModule.GoogleSignin;
+        statusCodes = googleSignInModule.statusCodes;
+
+        GoogleSignin.configure({
+            webClientId: WEB_CLIENT_ID,
+            offlineAccess: true,
+            scopes: ['profile', 'email'],
+        });
+    } catch (e) {
+        console.log('Native Google Sign-In not available');
+    }
+}
+
+// Warm up browser for Expo Go OAuth
+WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
     const router = useRouter();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
     useEffect(() => {
+        // Handle deep link callback for browser OAuth (Expo Go)
+        const handleUrl = async ({ url }: { url: string }) => {
+            if (url.includes('auth/callback') || url.includes('#access_token')) {
+                // Try to extract tokens from URL
+                const hashIndex = url.indexOf('#');
+                if (hashIndex !== -1) {
+                    const fragment = url.substring(hashIndex + 1);
+                    const params = new URLSearchParams(fragment);
+                    const accessToken = params.get('access_token');
+                    const refreshToken = params.get('refresh_token');
+
+                    if (accessToken && refreshToken) {
+                        await supabase.auth.setSession({
+                            access_token: accessToken,
+                            refresh_token: refreshToken,
+                        });
+                        router.replace('/(tabs)');
+                    }
+                }
+            }
+        };
+
+        const subscription = Linking.addEventListener('url', handleUrl);
+
+        // Check for initial URL (app opened via deep link)
+        Linking.getInitialURL().then((url) => {
+            if (url) handleUrl({ url });
+        });
+
+        return () => subscription.remove();
     }, []);
 
     const handleGoogleSignIn = async () => {
-        Alert.alert('Temporary Disable', 'Google Sign-In is temporarily disabled for debugging.');
+        try {
+            setGoogleLoading(true);
+
+            // Use native Google Sign-In for production builds
+            if (GoogleSignin && !isExpoGo) {
+                await handleNativeGoogleSignIn();
+            } else {
+                // Use browser OAuth for Expo Go
+                await handleBrowserGoogleSignIn();
+            }
+        } catch (error: any) {
+            console.error('Google Sign-In Error:', error);
+            Alert.alert('Sign-In Failed', error.message || 'Unable to sign in with Google. Please try again.');
+        } finally {
+            setGoogleLoading(false);
+        }
+    };
+
+    const handleNativeGoogleSignIn = async () => {
+        try {
+            console.log('Starting native Google Sign-In...');
+
+            // Check if Google Play Services are available
+            await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+            // Sign in with Google
+            const userInfo = await GoogleSignin.signIn();
+            console.log('Google Sign-In successful');
+
+            // Get the ID token
+            // Robust check: try to get from result, otherwise fetch explicitly
+            let idToken = userInfo.data?.idToken || userInfo.idToken;
+
+            if (!idToken) {
+                console.log('No ID token in result, calling getTokens()...');
+                try {
+                    const tokens = await GoogleSignin.getTokens();
+                    idToken = tokens.idToken;
+                } catch (tokenError) {
+                    console.error('Error fetching tokens:', tokenError);
+                }
+            }
+
+            if (!idToken) {
+                throw new Error('No ID token received from Google');
+            }
+
+            console.log('Got Google ID token, signing in with Supabase...');
+
+            // Sign in to Supabase with the Google ID token
+            const { data, error } = await supabase.auth.signInWithIdToken({
+                provider: 'google',
+                token: idToken,
+            });
+
+            if (error) {
+                console.error('Supabase auth error:', error);
+                throw error;
+            }
+
+            if (data.session) {
+                console.log('✅ Successfully signed in with Google!');
+                router.replace('/(tabs)');
+            }
+        } catch (error: any) {
+            console.error('Native sign-in error:', error);
+            if (statusCodes && error.code === statusCodes.SIGN_IN_CANCELLED) {
+                console.log('User cancelled the sign-in');
+            } else if (statusCodes && error.code === statusCodes.IN_PROGRESS) {
+                Alert.alert('Sign-In in progress', 'Please wait...');
+            } else if (statusCodes && error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+                Alert.alert('Play Services Missing', 'Google Play Services are required for this device/emulator.');
+            } else {
+                Alert.alert('Sign-In Failed', error.message || 'Unable to sign in with Google.');
+            }
+        }
+    };
+
+    const handleBrowserGoogleSignIn = async () => {
+        // For Expo Go, we'll use a special flow:
+        // 1. Open the browser for Google sign-in
+        // 2. After sign-in, the user is created/logged in on Supabase's side
+        // 3. We poll for the session or guide the user to close the browser
+
+        const redirectUrl = Linking.createURL('auth/callback');
+        console.log('Browser OAuth redirect URL:', redirectUrl);
+
+        // Request the OAuth URL from Supabase
+        const { data, error } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: redirectUrl,
+                skipBrowserRedirect: true,
+            },
+        });
+
+        if (error) throw error;
+
+        if (data.url) {
+            // Open the browser
+            const result = await WebBrowser.openAuthSessionAsync(
+                data.url,
+                redirectUrl,
+                {
+                    showInRecents: true,
+                    preferEphemeralSession: false,
+                }
+            );
+
+            console.log('Browser result:', result.type);
+
+            // Check for success with URL containing tokens
+            if (result.type === 'success' && result.url) {
+                const url = result.url;
+                console.log('Return URL:', url);
+
+                // Try to extract tokens from hash fragment
+                const hashIndex = url.indexOf('#');
+                if (hashIndex !== -1) {
+                    const fragment = url.substring(hashIndex + 1);
+                    const params = new URLSearchParams(fragment);
+                    const accessToken = params.get('access_token');
+                    const refreshToken = params.get('refresh_token');
+
+                    if (accessToken && refreshToken) {
+                        console.log('Got tokens from URL, setting session...');
+                        await supabase.auth.setSession({
+                            access_token: accessToken,
+                            refresh_token: refreshToken,
+                        });
+                        router.replace('/(tabs)');
+                        return;
+                    }
+                }
+            }
+
+            // If browser was dismissed or cancelled, check if user signed in anyway
+            // (User might have completed sign-in but browser didn't redirect properly)
+            console.log('Checking for existing session...');
+
+            // Wait a moment for Supabase to process
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const { data: sessionData } = await supabase.auth.getSession();
+            if (sessionData.session) {
+                console.log('Found existing session!');
+                router.replace('/(tabs)');
+                return;
+            }
+
+            // If still no session, try refreshing
+            const { data: refreshData } = await supabase.auth.refreshSession();
+            if (refreshData.session) {
+                console.log('Got session after refresh!');
+                router.replace('/(tabs)');
+                return;
+            }
+
+            // Last resort: Show a helpful message
+            Alert.alert(
+                'Almost There!',
+                'If you completed the Google sign-in, please tap "Continue with Google" again. Your account has been created.',
+                [{ text: 'OK' }]
+            );
+        }
     };
 
     const handleLogin = async () => {
@@ -179,11 +398,15 @@ export default function LoginScreen() {
                             </View>
 
                             <TouchableOpacity
-                                style={[styles.socialBtn, loading && { opacity: 0.7 }]}
+                                style={[styles.socialBtn, googleLoading && { opacity: 0.7 }]}
                                 onPress={handleGoogleSignIn}
-                                disabled={loading}
+                                disabled={googleLoading || loading}
                             >
-                                <Text style={styles.socialText}>Verify with Google</Text>
+                                {googleLoading ? (
+                                    <ActivityIndicator color={COLORS.white} />
+                                ) : (
+                                    <Text style={styles.socialText}>Continue with Google</Text>
+                                )}
                             </TouchableOpacity>
 
                             <View style={styles.footer}>

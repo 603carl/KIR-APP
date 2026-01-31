@@ -57,6 +57,9 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
                 playsInSilentModeIOS: true,
                 shouldDuckAndroid: true,
                 staysActiveInBackground: true,
+                interruptionModeIOS: expoAudio.InterruptionModeIOS.DoNotMix,
+                interruptionModeAndroid: expoAudio.InterruptionModeAndroid.DoNotMix,
+                playThroughEarpieceAndroid: false
             });
 
             // Tiered loading strategy: Local Asset (Preloaded) -> Reliable GitHub -> Backups
@@ -128,8 +131,11 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
 
     const triggerExtremeAlertSequence = () => {
         if (alert?.severity === 'extreme') {
-            Vibration.vibrate([0, 1000, 500, 1000, 500, 1000, 500, 2000], true);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            const interval = setInterval(() => {
+                Vibration.vibrate([0, 1000, 500, 1000], false);
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            }, 3000);
+            return () => clearInterval(interval);
         } else if (alert?.severity === 'severe') {
             Vibration.vibrate([0, 800, 400, 800], true);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);

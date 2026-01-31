@@ -29,7 +29,8 @@
         "ACCESS_COARSE_LOCATION",
         "VIBRATE",
         "USE_FULL_SCREEN_INTENT",
-        "SCHEDULE_EXACT_ALARM"
+        "SCHEDULE_EXACT_ALARM",
+        "SYSTEM_ALERT_WINDOW"
       ]
     },
     "web": {

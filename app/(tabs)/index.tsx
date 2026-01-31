@@ -1,11 +1,9 @@
-import { BroadcastAlert, EmergencyBroadcastOverlay } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { normalizeCounty } from '@/lib/utils';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import {
   AlertCircle,
@@ -54,8 +52,6 @@ export default function DashboardScreen() {
   const [stats, setStats] = useState({ resolvedRate: '0%', trend: '+0%' });
   const [userName, setUserName] = useState('Citizen');
   const [sosActive, setSosActive] = useState(false);
-  const [activeBroadcast, setActiveBroadcast] = useState<BroadcastAlert | null>(null);
-  const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
 
   // Performance: Cache user to avoid repeated auth calls
   const cachedUser = useRef<any>(null);
@@ -67,8 +63,7 @@ export default function DashboardScreen() {
     Promise.all([
       fetchUser(),
       fetchStats(),
-      checkLocationPermission(),
-      loadAcknowledgedIds()
+      checkLocationPermission()
     ]);
 
     const subscription = supabase
@@ -79,16 +74,8 @@ export default function DashboardScreen() {
       })
       .subscribe();
 
-    const broadcastSubscription = supabase
-      .channel('public:broadcasts')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
-        handleNewBroadcast(payload.new as BroadcastAlert);
-      })
-      .subscribe();
-
     return () => {
       supabase.removeChannel(subscription);
-      supabase.removeChannel(broadcastSubscription);
     };
   }, []);
 
@@ -132,30 +119,6 @@ export default function DashboardScreen() {
     }
   };
 
-  const loadAcknowledgedIds = async () => {
-    try {
-      const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
-      if (stored) {
-        setAcknowledgedIds(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error('SecureStore error:', e);
-    }
-  };
-
-
-  const handleNewBroadcast = (broadcast: BroadcastAlert) => {
-    // If it's already acknowledged, don't show it
-    if (acknowledgedIds.includes(broadcast.id)) return;
-    setActiveBroadcast(broadcast);
-  };
-
-  const handleAcknowledgeBroadcast = async (id: string) => {
-    const updatedIds = [...acknowledgedIds, id];
-    setAcknowledgedIds(updatedIds);
-    await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
-    setActiveBroadcast(null);
-  };
 
   const checkLocationPermission = async () => {
     if (isRequestingLocation.current) return;
@@ -548,10 +511,6 @@ export default function DashboardScreen() {
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
-      <EmergencyBroadcastOverlay
-        alert={activeBroadcast}
-        onAcknowledge={handleAcknowledgeBroadcast}
-      />
     </View>
   );
 }
