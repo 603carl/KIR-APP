@@ -1,12 +1,9 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { BlurView } from 'expo-blur';
-import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Linking from 'expo-linking';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import * as WebBrowser from 'expo-web-browser';
 import { ArrowRight, Lock, Mail } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
@@ -15,34 +12,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width, height } = Dimensions.get('window');
 
-// Check if we're running in Expo Go or a development/production build
-const isExpoGo = Constants.appOwnership === 'expo';
-
-// Configure Google Sign-In for native builds only
+// Configure Google Sign-In for native builds
 const WEB_CLIENT_ID = '751130763657-6s429sp824lsha2sdqp9ooler427hve2.apps.googleusercontent.com';
 
-// Dynamically import native Google Sign-In (only works in dev/prod builds)
 let GoogleSignin: any = null;
 let statusCodes: any = null;
 
-if (!isExpoGo) {
-    try {
-        const googleSignInModule = require('@react-native-google-signin/google-signin');
-        GoogleSignin = googleSignInModule.GoogleSignin;
-        statusCodes = googleSignInModule.statusCodes;
+try {
+    const googleSignInModule = require('@react-native-google-signin/google-signin');
+    GoogleSignin = googleSignInModule.GoogleSignin;
+    statusCodes = googleSignInModule.statusCodes;
 
-        GoogleSignin.configure({
-            webClientId: WEB_CLIENT_ID,
-            offlineAccess: true,
-            scopes: ['profile', 'email'],
-        });
-    } catch (e) {
-        console.log('Native Google Sign-In not available');
-    }
+    GoogleSignin.configure({
+        webClientId: WEB_CLIENT_ID,
+        offlineAccess: true,
+        scopes: ['profile', 'email'],
+    });
+} catch (e) {
+    console.log('Native Google Sign-In module not found (Required for in-app experience)');
 }
-
-// Warm up browser for Expo Go OAuth
-WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
     const router = useRouter();
@@ -51,51 +39,60 @@ export default function LoginScreen() {
     const [loading, setLoading] = useState(false);
     const [googleLoading, setGoogleLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [otpCode, setOtpCode] = useState('');
+    const [otpLoading, setOtpLoading] = useState(false);
 
     useEffect(() => {
-        // Handle deep link callback for browser OAuth (Expo Go)
-        const handleUrl = async ({ url }: { url: string }) => {
-            if (url.includes('auth/callback') || url.includes('#access_token')) {
-                // Try to extract tokens from URL
-                const hashIndex = url.indexOf('#');
-                if (hashIndex !== -1) {
-                    const fragment = url.substring(hashIndex + 1);
-                    const params = new URLSearchParams(fragment);
-                    const accessToken = params.get('access_token');
-                    const refreshToken = params.get('refresh_token');
-
-                    if (accessToken && refreshToken) {
-                        await supabase.auth.setSession({
-                            access_token: accessToken,
-                            refresh_token: refreshToken,
-                        });
-                        router.replace('/(tabs)');
-                    }
-                }
-            }
-        };
-
-        const subscription = Linking.addEventListener('url', handleUrl);
-
-        // Check for initial URL (app opened via deep link)
-        Linking.getInitialURL().then((url) => {
-            if (url) handleUrl({ url });
-        });
-
-        return () => subscription.remove();
+        // Only checking initial auth state if needed, browser deep links removed
     }, []);
+
+    const syncUserProfile = async (user: any) => {
+        try {
+            const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
+            const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+
+            // Check if profile exists
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('id, full_name')
+                .eq('id', user.id)
+                .single();
+
+            if (!profile) {
+                // Create new profile
+                await supabase.from('profiles').insert({
+                    id: user.id,
+                    full_name: fullName,
+                    email: user.email,
+                    avatar_url: avatarUrl,
+                    role: 'reporter'
+                });
+            } else if (!profile.full_name || profile.full_name === 'Citizen') {
+                // Update profile if name is generic
+                await supabase.from('profiles').update({
+                    full_name: fullName,
+                    avatar_url: avatarUrl
+                }).eq('id', user.id);
+            }
+        } catch (e) {
+            console.error('Profile sync error:', e);
+        }
+    };
 
     const handleGoogleSignIn = async () => {
         try {
-            setGoogleLoading(true);
-
-            // Use native Google Sign-In for production builds
-            if (GoogleSignin && !isExpoGo) {
-                await handleNativeGoogleSignIn();
-            } else {
-                // Use browser OAuth for Expo Go
-                await handleBrowserGoogleSignIn();
+            if (!GoogleSignin) {
+                Alert.alert(
+                    'Native Build Required',
+                    'The premium "In-App" Google Sign-In experience requires a Development Build. Standard Expo Go does not support this feature.',
+                    [{ text: 'Understand' }]
+                );
+                return;
             }
+
+            setGoogleLoading(true);
+            await handleNativeGoogleSignIn();
         } catch (error: any) {
             console.error('Google Sign-In Error:', error);
             Alert.alert('Sign-In Failed', error.message || 'Unable to sign in with Google. Please try again.');
@@ -111,7 +108,12 @@ export default function LoginScreen() {
             // Check if Google Play Services are available
             await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-            // Sign in with Google
+            // Sign in with Google - force account selection by signing out first
+            try {
+                await GoogleSignin.signOut();
+            } catch (signOutError) {
+                // Ignore sign out errors if not signed in
+            }
             const userInfo = await GoogleSignin.signIn();
             console.log('Google Sign-In successful');
 
@@ -147,7 +149,9 @@ export default function LoginScreen() {
             }
 
             if (data.session) {
-                console.log('✅ Successfully signed in with Google!');
+                if (data.user) {
+                    await syncUserProfile(data.user);
+                }
                 router.replace('/(tabs)');
             }
         } catch (error: any) {
@@ -164,94 +168,6 @@ export default function LoginScreen() {
         }
     };
 
-    const handleBrowserGoogleSignIn = async () => {
-        // For Expo Go, we'll use a special flow:
-        // 1. Open the browser for Google sign-in
-        // 2. After sign-in, the user is created/logged in on Supabase's side
-        // 3. We poll for the session or guide the user to close the browser
-
-        const redirectUrl = Linking.createURL('auth/callback');
-        console.log('Browser OAuth redirect URL:', redirectUrl);
-
-        // Request the OAuth URL from Supabase
-        const { data, error } = await supabase.auth.signInWithOAuth({
-            provider: 'google',
-            options: {
-                redirectTo: redirectUrl,
-                skipBrowserRedirect: true,
-            },
-        });
-
-        if (error) throw error;
-
-        if (data.url) {
-            // Open the browser
-            const result = await WebBrowser.openAuthSessionAsync(
-                data.url,
-                redirectUrl,
-                {
-                    showInRecents: true,
-                    preferEphemeralSession: false,
-                }
-            );
-
-            console.log('Browser result:', result.type);
-
-            // Check for success with URL containing tokens
-            if (result.type === 'success' && result.url) {
-                const url = result.url;
-                console.log('Return URL:', url);
-
-                // Try to extract tokens from hash fragment
-                const hashIndex = url.indexOf('#');
-                if (hashIndex !== -1) {
-                    const fragment = url.substring(hashIndex + 1);
-                    const params = new URLSearchParams(fragment);
-                    const accessToken = params.get('access_token');
-                    const refreshToken = params.get('refresh_token');
-
-                    if (accessToken && refreshToken) {
-                        console.log('Got tokens from URL, setting session...');
-                        await supabase.auth.setSession({
-                            access_token: accessToken,
-                            refresh_token: refreshToken,
-                        });
-                        router.replace('/(tabs)');
-                        return;
-                    }
-                }
-            }
-
-            // If browser was dismissed or cancelled, check if user signed in anyway
-            // (User might have completed sign-in but browser didn't redirect properly)
-            console.log('Checking for existing session...');
-
-            // Wait a moment for Supabase to process
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            const { data: sessionData } = await supabase.auth.getSession();
-            if (sessionData.session) {
-                console.log('Found existing session!');
-                router.replace('/(tabs)');
-                return;
-            }
-
-            // If still no session, try refreshing
-            const { data: refreshData } = await supabase.auth.refreshSession();
-            if (refreshData.session) {
-                console.log('Got session after refresh!');
-                router.replace('/(tabs)');
-                return;
-            }
-
-            // Last resort: Show a helpful message
-            Alert.alert(
-                'Almost There!',
-                'If you completed the Google sign-in, please tap "Continue with Google" again. Your account has been created.',
-                [{ text: 'OK' }]
-            );
-        }
-    };
 
     const handleLogin = async () => {
         if (!email || !password) {
@@ -282,12 +198,45 @@ export default function LoginScreen() {
                     ]
                 );
             } else if (error.message.includes('Email not confirmed')) {
-                Alert.alert('Email Not Verified', 'Please check your email and click the verification link before signing in.');
+                Alert.alert(
+                    'Email Not Verified',
+                    'Your email address has not been verified. Would you like to enter a verification code?',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Enter Code', onPress: () => setIsVerifying(true) }
+                    ]
+                );
             } else {
                 Alert.alert('Error', error.message);
             }
         } else {
             router.replace('/(tabs)');
+        }
+    };
+
+    const handleOtpVerify = async () => {
+        if (!otpCode || otpCode.length < 6) {
+            Alert.alert('Error', 'Please enter a valid 6-digit code');
+            return;
+        }
+
+        setOtpLoading(true);
+        try {
+            const { data, error } = await supabase.auth.verifyOtp({
+                email: email.trim().toLowerCase(),
+                token: otpCode.trim(),
+                type: 'signup',
+            });
+
+            if (error) throw error;
+
+            if (data.session) {
+                router.replace('/(tabs)');
+            }
+        } catch (error: any) {
+            Alert.alert('Verification Failed', error.message);
+        } finally {
+            setOtpLoading(false);
         }
     };
 
@@ -328,93 +277,139 @@ export default function LoginScreen() {
                         transition={{ type: 'timing', duration: 800, delay: 300 }}
                     >
                         <BlurView intensity={40} tint="light" style={styles.glassCard}>
-                            <Text style={styles.formTitle}>Welcome Back</Text>
-
-                            <View style={styles.inputGroup}>
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <Mail size={18} color={COLORS.white} />
+                            {isVerifying ? (
+                                <View style={styles.form}>
+                                    <Text style={styles.formTitle}>Verify Email</Text>
+                                    <Text style={styles.otpSubText}>
+                                        Enter the 6-digit code sent to {email}
+                                    </Text>
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <Lock size={18} color={COLORS.white} />
+                                        </View>
+                                        <TextInput
+                                            placeholder="6-Digit Code"
+                                            style={styles.input}
+                                            placeholderTextColor="rgba(255,255,255,0.6)"
+                                            keyboardType="number-pad"
+                                            maxLength={6}
+                                            value={otpCode}
+                                            onChangeText={setOtpCode}
+                                        />
                                     </View>
-                                    <TextInput
-                                        placeholder="Email Address"
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        autoCapitalize="none"
-                                        value={email}
-                                        onChangeText={setEmail}
-                                    />
-                                </View>
 
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <Lock size={18} color={COLORS.white} />
-                                    </View>
-                                    <TextInput
-                                        placeholder="Password"
-                                        secureTextEntry={!showPassword}
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        value={password}
-                                        onChangeText={setPassword}
-                                        autoCapitalize="none"
-                                    />
                                     <TouchableOpacity
-                                        style={styles.monkeyToggle}
-                                        onPress={() => setShowPassword(!showPassword)}
+                                        style={[styles.loginBtn, otpLoading && { opacity: 0.7 }]}
+                                        onPress={handleOtpVerify}
+                                        disabled={otpLoading}
                                     >
-                                        <Text style={styles.monkeyEmoji}>{showPassword ? '🙈' : '🐵'}</Text>
+                                        <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.loginGradient}>
+                                            {otpLoading ? (
+                                                <ActivityIndicator color={COLORS.primary} />
+                                            ) : (
+                                                <Text style={styles.loginBtnText}>Verify & Login</Text>
+                                            )}
+                                        </LinearGradient>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        onPress={() => setIsVerifying(false)}
+                                        style={{ marginTop: 12, alignSelf: 'center' }}
+                                    >
+                                        <Text style={styles.signupText}>Back to Sign In</Text>
                                     </TouchableOpacity>
                                 </View>
-                            </View>
+                            ) : (
+                                <>
+                                    <Text style={styles.formTitle}>Welcome Back</Text>
 
-                            <TouchableOpacity
-                                style={styles.forgotBtn}
-                                onPress={() => router.push('/auth/forgot-password')}
-                            >
-                                <Text style={styles.forgotText}>Forgot Password?</Text>
-                            </TouchableOpacity>
+                                    <View style={styles.inputGroup}>
+                                        <View style={styles.inputContainer}>
+                                            <View style={styles.inputIconBox}>
+                                                <Mail size={18} color={COLORS.white} />
+                                            </View>
+                                            <TextInput
+                                                placeholder="Email Address"
+                                                style={styles.input}
+                                                placeholderTextColor="rgba(255,255,255,0.6)"
+                                                autoCapitalize="none"
+                                                value={email}
+                                                onChangeText={setEmail}
+                                            />
+                                        </View>
 
-                            <TouchableOpacity
-                                style={[styles.loginBtn, loading && { opacity: 0.7 }]}
-                                onPress={handleLogin}
-                                disabled={loading}
-                            >
-                                <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.loginGradient}>
-                                    {loading ? (
-                                        <ActivityIndicator color={COLORS.primary} />
-                                    ) : (
-                                        <>
-                                            <Text style={styles.loginBtnText}>Sign In</Text>
-                                            <ArrowRight size={20} color={COLORS.primary} />
-                                        </>
-                                    )}
-                                </LinearGradient>
-                            </TouchableOpacity>
+                                        <View style={styles.inputContainer}>
+                                            <View style={styles.inputIconBox}>
+                                                <Lock size={18} color={COLORS.white} />
+                                            </View>
+                                            <TextInput
+                                                placeholder="Password"
+                                                secureTextEntry={!showPassword}
+                                                style={styles.input}
+                                                placeholderTextColor="rgba(255,255,255,0.6)"
+                                                value={password}
+                                                onChangeText={setPassword}
+                                                autoCapitalize="none"
+                                            />
+                                            <TouchableOpacity
+                                                style={styles.monkeyToggle}
+                                                onPress={() => setShowPassword(!showPassword)}
+                                            >
+                                                <Text style={styles.monkeyEmoji}>{showPassword ? '🙈' : '🐵'}</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
 
-                            <View style={styles.divider}>
-                                <View style={styles.line} />
-                                <Text style={styles.dividerText}>SECURE ACCESS</Text>
-                                <View style={styles.line} />
-                            </View>
+                                    <TouchableOpacity
+                                        style={styles.forgotBtn}
+                                        onPress={() => router.push('/auth/forgot-password')}
+                                    >
+                                        <Text style={styles.forgotText}>Forgot Password?</Text>
+                                    </TouchableOpacity>
 
-                            <TouchableOpacity
-                                style={[styles.socialBtn, googleLoading && { opacity: 0.7 }]}
-                                onPress={handleGoogleSignIn}
-                                disabled={googleLoading || loading}
-                            >
-                                {googleLoading ? (
-                                    <ActivityIndicator color={COLORS.white} />
-                                ) : (
-                                    <Text style={styles.socialText}>Continue with Google</Text>
-                                )}
-                            </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.loginBtn, loading && { opacity: 0.7 }]}
+                                        onPress={handleLogin}
+                                        disabled={loading}
+                                    >
+                                        <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.loginGradient}>
+                                            {loading ? (
+                                                <ActivityIndicator color={COLORS.primary} />
+                                            ) : (
+                                                <>
+                                                    <Text style={styles.loginBtnText}>Sign In</Text>
+                                                    <ArrowRight size={20} color={COLORS.primary} />
+                                                </>
+                                            )}
+                                        </LinearGradient>
+                                    </TouchableOpacity>
 
-                            <View style={styles.footer}>
-                                <Text style={styles.footerText}>Don't have an account? </Text>
-                                <TouchableOpacity onPress={() => router.push('/auth/signup')}>
-                                    <Text style={styles.signupText}>Sign Up</Text>
-                                </TouchableOpacity>
-                            </View>
+                                    <View style={styles.divider}>
+                                        <View style={styles.line} />
+                                        <Text style={styles.dividerText}>SECURE ACCESS</Text>
+                                        <View style={styles.line} />
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={[styles.socialBtn, googleLoading && { opacity: 0.7 }]}
+                                        onPress={handleGoogleSignIn}
+                                        disabled={googleLoading || loading}
+                                    >
+                                        {googleLoading ? (
+                                            <ActivityIndicator color={COLORS.white} />
+                                        ) : (
+                                            <Text style={styles.socialText}>Continue with Google</Text>
+                                        )}
+                                    </TouchableOpacity>
+
+                                    <View style={styles.footer}>
+                                        <Text style={styles.footerText}>Don't have an account? </Text>
+                                        <TouchableOpacity onPress={() => router.push('/auth/signup')}>
+                                            <Text style={styles.signupText}>Sign Up</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
                         </BlurView>
                     </MotiView>
                 </ScrollView>
@@ -433,6 +428,8 @@ const styles = StyleSheet.create({
     logoSubtext: { fontSize: 13, color: 'rgba(255,255,255,0.7)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
     glassCard: { borderRadius: 32, padding: 24, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', ...SHADOWS.premium },
     formTitle: { fontSize: 26, fontWeight: '900', color: COLORS.white, marginBottom: 32, textAlign: 'center' },
+    form: { gap: 18 },
+    otpSubText: { color: 'rgba(255,255,255,0.7)', fontSize: 14, textAlign: 'center', marginBottom: 12, fontWeight: '500' },
     inputGroup: { gap: 18 },
     inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)', height: 64, borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
     inputIconBox: { width: 36, height: 36, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },

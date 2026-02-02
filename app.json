@@ -58,7 +58,8 @@
         }
       ],
       "@react-native-google-signin/google-signin/app.plugin.js",
-      "expo-asset"
+      "expo-asset",
+      "./plugins/withAndroidFullScreen"
     ],
     "experiments": {
       "typedRoutes": true

@@ -26,6 +26,9 @@ export default function SignupScreen() {
     const [county, setCounty] = useState('');
     const [isCountyModalVisible, setIsCountyModalVisible] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [otpCode, setOtpCode] = useState('');
+    const [verificationLoading, setVerificationLoading] = useState(false);
 
     const filteredCounties = COUNTIES.filter(c =>
         c.toLowerCase().includes(searchQuery.toLowerCase())
@@ -61,9 +64,42 @@ export default function SignupScreen() {
             Alert.alert('Error', error.message);
             setLoading(false);
         } else {
-            Alert.alert('Success', 'Check your email for confirmation!');
-            router.replace('/auth/login');
+            // Instead of redirecting, show OTP verification stage
+            setIsVerifying(true);
+            setLoading(false);
+            Alert.alert('Verify Your Email', 'We have sent a 6-digit verification code to your email.');
         }
+    };
+
+    const handleVerifyOtp = async () => {
+        if (otpCode.length !== 6) {
+            Alert.alert('Error', 'Please enter the 6-digit code');
+            return;
+        }
+
+        setVerificationLoading(true);
+        const { data, error } = await supabase.auth.verifyOtp({
+            email: email.trim(),
+            token: otpCode,
+            type: 'signup'
+        });
+
+        if (error) {
+            Alert.alert('Verification Failed', error.message);
+            setVerificationLoading(false);
+        } else {
+            Alert.alert('Success', 'Your email has been verified!');
+            router.replace('/(tabs)');
+        }
+    };
+
+    const handleResendOtp = async () => {
+        const { error } = await supabase.auth.resend({
+            type: 'signup',
+            email: email.trim(),
+        });
+        if (error) Alert.alert('Error', error.message);
+        else Alert.alert('Sent', 'A new verification code has been sent to your email.');
     };
 
     return (
@@ -98,130 +134,183 @@ export default function SignupScreen() {
                         transition={{ delay: 200 }}
                     >
                         <BlurView intensity={40} tint="light" style={styles.glassCard}>
-                            <View style={styles.form}>
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <User size={18} color={COLORS.white} />
-                                    </View>
-                                    <TextInput
-                                        placeholder="Full Name"
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        value={fullName}
-                                        onChangeText={setFullName}
-                                    />
-                                </View>
-
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <Mail size={18} color={COLORS.white} />
-                                    </View>
-                                    <TextInput
-                                        placeholder="Email Address"
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        autoCapitalize="none"
-                                        value={email}
-                                        onChangeText={setEmail}
-                                    />
-                                </View>
-
-                                <TouchableOpacity
-                                    style={styles.inputContainer}
-                                    onPress={() => setIsCountyModalVisible(true)}
-                                >
-                                    <View style={styles.inputIconBox}>
-                                        <MapPin size={18} color={COLORS.white} />
-                                    </View>
-                                    <View style={{ flex: 1, marginLeft: 12 }}>
-                                        <Text style={[styles.inputFieldText, !county && { color: 'rgba(255,255,255,0.6)' }]}>
-                                            {county || 'Select Your County'}
-                                        </Text>
-                                    </View>
-                                </TouchableOpacity>
-
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <Lock size={18} color={COLORS.white} />
-                                    </View>
-                                    <TextInput
-                                        placeholder="Password"
-                                        secureTextEntry={!showPassword}
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        value={password}
-                                        onChangeText={setPassword}
-                                        autoCapitalize="none"
-                                    />
-                                    <TouchableOpacity
-                                        style={styles.monkeyToggle}
-                                        onPress={() => setShowPassword(!showPassword)}
-                                    >
-                                        <Text style={styles.monkeyEmoji}>{showPassword ? '🙈' : '🐵'}</Text>
-                                    </TouchableOpacity>
-                                </View>
-
-                                <View style={styles.inputContainer}>
-                                    <View style={styles.inputIconBox}>
-                                        <Lock size={18} color={COLORS.white} />
-                                    </View>
-                                    <TextInput
-                                        placeholder="Confirm Password"
-                                        secureTextEntry={!showConfirmPassword}
-                                        style={styles.input}
-                                        placeholderTextColor="rgba(255,255,255,0.6)"
-                                        value={confirmPassword}
-                                        onChangeText={setConfirmPassword}
-                                    />
-                                    <TouchableOpacity
-                                        style={styles.monkeyToggle}
-                                        onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                                    >
-                                        <Text style={styles.monkeyEmoji}>{showConfirmPassword ? '🙈' : '🐵'}</Text>
-                                    </TouchableOpacity>
-                                </View>
-
-                                <View style={styles.termsWrapper}>
-                                    <TouchableOpacity
-                                        style={styles.termsRow}
-                                        onPress={() => setAgree(!agree)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <View style={[styles.checkbox, agree && styles.checkboxActive]}>
-                                            {agree && <Check size={12} color={COLORS.white} strokeWidth={4} />}
+                            {!isVerifying ? (
+                                <View style={styles.form}>
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <User size={18} color={COLORS.white} />
                                         </View>
-                                        <Text style={styles.termsText}>
-                                            I agree to the{' '}
-                                            <Text
-                                                style={styles.legalLink}
-                                                onPress={() => router.push('/legal/terms')}
-                                            >Terms of Service</Text>
-                                            {' '}and{' '}
-                                            <Text
-                                                style={styles.legalLink}
-                                                onPress={() => router.push('/legal/privacy')}
-                                            >Privacy Policy</Text>
-                                        </Text>
+                                        <TextInput
+                                            placeholder="Full Name"
+                                            style={styles.input}
+                                            placeholderTextColor="rgba(255,255,255,0.6)"
+                                            value={fullName}
+                                            onChangeText={setFullName}
+                                        />
+                                    </View>
+
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <Mail size={18} color={COLORS.white} />
+                                        </View>
+                                        <TextInput
+                                            placeholder="Email Address"
+                                            style={styles.input}
+                                            placeholderTextColor="rgba(255,255,255,0.6)"
+                                            autoCapitalize="none"
+                                            value={email}
+                                            onChangeText={setEmail}
+                                        />
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={styles.inputContainer}
+                                        onPress={() => setIsCountyModalVisible(true)}
+                                    >
+                                        <View style={styles.inputIconBox}>
+                                            <MapPin size={18} color={COLORS.white} />
+                                        </View>
+                                        <View style={{ flex: 1, marginLeft: 12 }}>
+                                            <Text style={[styles.inputFieldText, !county && { color: 'rgba(255,255,255,0.6)' }]}>
+                                                {county || 'Select Your County'}
+                                            </Text>
+                                        </View>
+                                    </TouchableOpacity>
+
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <Lock size={18} color={COLORS.white} />
+                                        </View>
+                                        <TextInput
+                                            placeholder="Password"
+                                            secureTextEntry={!showPassword}
+                                            style={styles.input}
+                                            placeholderTextColor="rgba(255,255,255,0.6)"
+                                            value={password}
+                                            onChangeText={setPassword}
+                                            autoCapitalize="none"
+                                        />
+                                        <TouchableOpacity
+                                            style={styles.monkeyToggle}
+                                            onPress={() => setShowPassword(!showPassword)}
+                                        >
+                                            <Text style={styles.monkeyEmoji}>{showPassword ? '🙈' : '🐵'}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <Lock size={18} color={COLORS.white} />
+                                        </View>
+                                        <TextInput
+                                            placeholder="Confirm Password"
+                                            secureTextEntry={!showConfirmPassword}
+                                            style={styles.input}
+                                            placeholderTextColor="rgba(255,255,255,0.6)"
+                                            value={confirmPassword}
+                                            onChangeText={setConfirmPassword}
+                                        />
+                                        <TouchableOpacity
+                                            style={styles.monkeyToggle}
+                                            onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                                        >
+                                            <Text style={styles.monkeyEmoji}>{showConfirmPassword ? '🙈' : '🐵'}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    <View style={styles.termsWrapper}>
+                                        <TouchableOpacity
+                                            style={styles.termsRow}
+                                            onPress={() => setAgree(!agree)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <View style={[styles.checkbox, agree && styles.checkboxActive]}>
+                                                {agree && <Check size={12} color={COLORS.white} strokeWidth={4} />}
+                                            </View>
+                                            <Text style={styles.termsText}>
+                                                I agree to the{' '}
+                                                <Text
+                                                    style={styles.legalLink}
+                                                    onPress={() => router.push('/legal/terms')}
+                                                >Terms of Service</Text>
+                                                {' '}and{' '}
+                                                <Text
+                                                    style={styles.legalLink}
+                                                    onPress={() => router.push('/legal/privacy')}
+                                                >Privacy Policy</Text>
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={[styles.signupBtn, loading && { opacity: 0.7 }]}
+                                        onPress={handleSignUp}
+                                        disabled={loading}
+                                    >
+                                        <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.gradient}>
+                                            {loading ? (
+                                                <ActivityIndicator color={COLORS.primary} />
+                                            ) : (
+                                                <>
+                                                    <Text style={styles.signupBtnText}>Get Started</Text>
+                                                    <ArrowRight size={20} color={COLORS.primary} />
+                                                </>
+                                            )}
+                                        </LinearGradient>
                                     </TouchableOpacity>
                                 </View>
+                            ) : (
+                                <View style={styles.form}>
+                                    <Text style={styles.otpLabel}>Verify your account</Text>
+                                    <Text style={styles.otpSub}>Enter the 6-digit code sent to {email}</Text>
 
-                                <TouchableOpacity
-                                    style={[styles.signupBtn, loading && { opacity: 0.7 }]}
-                                    onPress={handleSignUp}
-                                    disabled={loading}
-                                >
-                                    <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.gradient}>
-                                        {loading ? (
-                                            <ActivityIndicator color={COLORS.primary} />
-                                        ) : (
-                                            <>
-                                                <Text style={styles.signupBtnText}>Get Started</Text>
-                                                <ArrowRight size={20} color={COLORS.primary} />
-                                            </>
-                                        )}
-                                    </LinearGradient>
-                                </TouchableOpacity>
-                            </View>
+                                    <View style={styles.inputContainer}>
+                                        <View style={styles.inputIconBox}>
+                                            <Lock size={18} color={COLORS.white} />
+                                        </View>
+                                        <TextInput
+                                            placeholder="000000"
+                                            style={[styles.input, { letterSpacing: 8, fontSize: 24 }]}
+                                            placeholderTextColor="rgba(255,255,255,0.4)"
+                                            keyboardType="number-pad"
+                                            maxLength={6}
+                                            value={otpCode}
+                                            onChangeText={setOtpCode}
+                                        />
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={[styles.signupBtn, verificationLoading && { opacity: 0.7 }]}
+                                        onPress={handleVerifyOtp}
+                                        disabled={verificationLoading}
+                                    >
+                                        <LinearGradient colors={[COLORS.white, '#E8E8E8']} style={styles.gradient}>
+                                            {verificationLoading ? (
+                                                <ActivityIndicator color={COLORS.primary} />
+                                            ) : (
+                                                <>
+                                                    <Text style={styles.signupBtnText}>Verify Code</Text>
+                                                    <Check size={20} color={COLORS.primary} />
+                                                </>
+                                            )}
+                                        </LinearGradient>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={styles.resendBtn}
+                                        onPress={handleResendOtp}
+                                    >
+                                        <Text style={styles.resendText}>Didn't receive a code? Resend</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        onPress={() => setIsVerifying(false)}
+                                        style={{ marginTop: 12 }}
+                                    >
+                                        <Text style={[styles.loginText, { textAlign: 'center' }]}>Back to Signup</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                         </BlurView>
                     </MotiView>
 
@@ -315,7 +404,10 @@ const styles = StyleSheet.create({
     footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 32 },
     footerText: { color: 'rgba(255,255,255,0.6)', fontSize: 14, fontWeight: '600' },
     loginText: { color: COLORS.white, fontWeight: '800', fontSize: 14, textDecorationLine: 'underline' },
-
+    otpLabel: { fontSize: 22, fontWeight: '900', color: COLORS.white, marginBottom: 8, textAlign: 'center' },
+    otpSub: { fontSize: 14, color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginBottom: 24, fontWeight: '500' },
+    resendBtn: { marginTop: 24, alignSelf: 'center' },
+    resendText: { color: COLORS.white, fontSize: 14, fontWeight: '700', opacity: 0.8 },
     // Modal Styles
     modalContainer: { flex: 1, justifyContent: 'flex-end' },
     modalContent: { backgroundColor: 'rgba(20,20,20,0.95)', borderTopLeftRadius: 32, borderTopRightRadius: 32, height: '80%', padding: 24 },

@@ -255,15 +255,17 @@ export default function ReportScreen() {
                                 ))}
                             </View>
 
-                            <View style={[styles.inputBox, { height: 120, alignItems: 'flex-start' }]}>
+                            <View style={[styles.inputBox, { height: 160, alignItems: 'flex-start' }]}>
                                 <TextInput
                                     placeholder="Describe the situation in detail..."
                                     multiline
-                                    style={[styles.textInput, { paddingTop: 12 }]}
+                                    style={[styles.textInput, { paddingTop: 12, width: '100%', height: '100%' }]}
                                     placeholderTextColor={COLORS.textMuted}
                                     value={description}
                                     onChangeText={setDescription}
                                     textAlignVertical="top"
+                                    scrollEnabled={false} // Prevents conflict with parent ScrollView
+                                    blurOnSubmit={false}
                                 />
                             </View>
 

@@ -42,19 +42,21 @@ export default function TabLayout() {
   useEffect(() => {
     fetchUnreadCount();
 
-    // Real-time subscription for notifications
-    const subscription = supabase
-      .channel('unread_notifications')
+    // Real-time subscription for notifications & Local Sync
+    const channel = supabase.channel('notification-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
         fetchUnreadCount();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
         fetchUnreadCount();
       })
+      .on('broadcast', { event: 'refresh-unread-count' }, () => {
+        fetchUnreadCount();
+      })
       .subscribe();
 
     return () => {
-      supabase.removeChannel(subscription);
+      supabase.removeChannel(channel);
     };
   }, []);
 
@@ -65,28 +67,43 @@ export default function TabLayout() {
 
       // Get acknowledged broadcast IDs from local storage
       let acknowledgedIds: string[] = [];
+      let deletedIds: string[] = [];
       try {
-        const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
-        if (stored) acknowledgedIds = JSON.parse(stored);
+        const [storedAck, storedDel] = await Promise.all([
+          SecureStore.getItemAsync('acknowledged_broadcasts'),
+          SecureStore.getItemAsync('deleted_notifications')
+        ]);
+        if (storedAck) acknowledgedIds = JSON.parse(storedAck);
+        if (storedDel) deletedIds = JSON.parse(storedDel);
       } catch (e) { }
 
-      // Count unread personal notifications
-      const { count: personalCount } = await supabase
+      // Fetch install date to filter old notifications
+      const installDate = await SecureStore.getItemAsync('install_date');
+      const filterDate = installDate || user.created_at;
+
+      // Fetch unread IDs to filter deleted ones
+      const { data: unreadPersonal } = await supabase
         .from('notifications')
-        .select('*', { count: 'exact', head: true })
+        .select('id')
         .eq('user_id', user.id)
-        .eq('is_read', false);
+        .eq('is_read', false)
+        .gt('created_at', filterDate);
 
-      // Count unacknowledged broadcasts
-      const { data: broadcasts } = await supabase
-        .from('broadcasts')
-        .select('id');
-
-      const unacknowledgedBroadcasts = (broadcasts || []).filter(
-        b => !acknowledgedIds.includes(b.id)
+      const unreadPersonalCount = (unreadPersonal || []).filter(
+        n => !deletedIds.includes(n.id)
       ).length;
 
-      setUnreadCount((personalCount || 0) + unacknowledgedBroadcasts);
+      // Count unacknowledged broadcasts since install
+      const { data: broadcasts } = await supabase
+        .from('broadcasts')
+        .select('id')
+        .gt('created_at', filterDate);
+
+      const unacknowledgedBroadcasts = (broadcasts || []).filter(
+        b => !acknowledgedIds.includes(b.id) && !deletedIds.includes(b.id)
+      ).length;
+
+      setUnreadCount(unreadPersonalCount + unacknowledgedBroadcasts);
     } catch (error) {
       console.error('Error fetching unread count:', error);
     }

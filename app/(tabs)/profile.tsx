@@ -102,8 +102,8 @@ export default function ProfileScreen() {
 
             const userId = session.user.id;
 
-            // Fetch all data in parallel for ultimate speed
-            const [profileRes, reportsRes, resolvedRes, verifyRes, iqRes] = await Promise.all([
+            // Fetch all data in parallel
+            const [profileRes, reportsRes, resolvedRes, verifyRes, iqRes] = await Promise.allSettled([
                 supabase.from('profiles').select('*').eq('id', userId).single(),
                 supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId),
                 supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'Resolved'),
@@ -111,26 +111,43 @@ export default function ProfileScreen() {
                 supabase.rpc('get_user_civic_intelligence', { target_user_id: userId })
             ]);
 
-            if (profileRes.error) throw profileRes.error;
+            // Handle Profile Data
+            if (profileRes.status === 'fulfilled' && profileRes.value.data) {
+                const profileData = profileRes.value.data;
+                setProfile(profileData);
+                setEditName(profileData.full_name || '');
+                setEditBio(profileData.bio || '');
+                setEditLocation(profileData.location_name || 'Nairobi, Kenya');
+                setBloodGroup(profileData.blood_group || '');
+                setEmergencyName(profileData.emergency_contact_name || '');
+                setEmergencyPhone(profileData.emergency_contact_phone || '');
+                setMedicalConditions(profileData.medical_conditions || '');
+            } else {
+                console.log('Profile missing or error in fetch, attempting sync...');
+                // Safety: Create missing profile if authenticated
+                const fullName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || 'Citizen';
+                const avatarUrl = session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || null;
 
-            const profileData = profileRes.data;
-            setProfile(profileData);
-            setEditName(profileData.full_name || '');
-            setEditBio(profileData.bio || '');
-            setEditLocation(profileData.location_name || 'Nairobi, Kenya');
+                const { data: newProfile, error: createError } = await supabase.from('profiles').upsert({
+                    id: userId,
+                    full_name: fullName,
+                    email: session.user.email,
+                    avatar_url: avatarUrl,
+                    role: 'reporter'
+                }).select().single();
 
-            // Set Emergency Info
-            setBloodGroup(profileData.blood_group || '');
-            setEmergencyName(profileData.emergency_contact_name || '');
-            setEmergencyPhone(profileData.emergency_contact_phone || '');
-            setMedicalConditions(profileData.medical_conditions || '');
+                if (!createError && newProfile) {
+                    setProfile(newProfile);
+                    setEditName(newProfile.full_name || '');
+                }
+            }
 
-            const iq = iqRes.data?.[0] || {};
-
+            // Handle Stats & Civic IQ
+            const iq = (iqRes.status === 'fulfilled' ? iqRes.value.data?.[0] : {}) || {};
             setStats({
-                reports: reportsRes.count || 0,
-                resolved: resolvedRes.count || 0,
-                verifications: verifyRes.count || 0,
+                reports: reportsRes.status === 'fulfilled' ? reportsRes.value.count || 0 : 0,
+                resolved: resolvedRes.status === 'fulfilled' ? resolvedRes.value.count || 0 : 0,
+                verifications: verifyRes.status === 'fulfilled' ? verifyRes.value.count || 0 : 0,
                 score: iq.impact_score || 0,
                 velocity: iq.velocity || 0,
                 isFirstResponder: iq.is_first_responder || false,
@@ -240,13 +257,13 @@ export default function ProfileScreen() {
         }
     };
 
-    const handleUpdatePrefs = async (key: string, value: boolean, section: 'notifications' | 'privacy') => {
+    const handleUpdatePrefs = async (key: string, value: any, section: 'notifications' | 'privacy') => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
             const field = section === 'notifications' ? 'notification_prefs' : 'privacy_settings';
-            const currentPrefs = profile[field] || {};
+            const currentPrefs = profile?.[field] || {};
             const newPrefs = { ...currentPrefs, [key]: value };
 
             const { error } = await supabase
@@ -255,7 +272,9 @@ export default function ProfileScreen() {
                 .eq('id', user.id);
 
             if (error) throw error;
-            setProfile({ ...profile, [field]: newPrefs });
+            if (profile) {
+                setProfile({ ...profile, [field]: newPrefs });
+            }
         } catch (error: any) {
             console.error('Update preferences error:', error);
         }
@@ -596,6 +615,34 @@ export default function ProfileScreen() {
                                                 />
                                             </View>
                                         ))}
+
+                                        <View style={[styles.prefRow, { flexDirection: 'column', alignItems: 'flex-start', gap: 16 }]}>
+                                            <View>
+                                                <Text style={styles.prefTitle}>Auto Sign-Out Timeout</Text>
+                                                <Text style={styles.prefSub}>App will sign out after being in background</Text>
+                                            </View>
+                                            <View style={styles.timeoutSelector}>
+                                                {[
+                                                    { label: '30s', value: 30 },
+                                                    { label: '1m', value: 60 },
+                                                    { label: 'Never', value: -1 }
+                                                ].map(opt => (
+                                                    <TouchableOpacity
+                                                        key={opt.value}
+                                                        onPress={() => handleUpdatePrefs('auto_sign_out_timeout', opt.value, 'privacy')}
+                                                        style={[
+                                                            styles.timeoutOption,
+                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 30) === opt.value && styles.timeoutOptionActive
+                                                        ]}
+                                                    >
+                                                        <Text style={[
+                                                            styles.timeoutText,
+                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 30) === opt.value && styles.timeoutTextActive
+                                                        ]}>{opt.label}</Text>
+                                                    </TouchableOpacity>
+                                                ))}
+                                            </View>
+                                        </View>
                                     </View>
                                 )}
                             </ScrollView>
@@ -671,4 +718,9 @@ const styles = StyleSheet.create({
     prefRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F9FA', padding: 20, borderRadius: 22, marginBottom: 12 },
     prefTitle: { fontSize: 16, fontWeight: '800', color: COLORS.black },
     prefSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 4, lineHeight: 16 },
+    timeoutSelector: { flexDirection: 'row', backgroundColor: '#E9ECEF', borderRadius: 12, padding: 4, width: '100%' },
+    timeoutOption: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+    timeoutOptionActive: { backgroundColor: COLORS.white, ...SHADOWS.soft },
+    timeoutText: { fontSize: 14, fontWeight: '700', color: COLORS.textMuted },
+    timeoutTextActive: { color: COLORS.primary },
 });

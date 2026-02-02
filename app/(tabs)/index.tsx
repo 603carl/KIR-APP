@@ -92,14 +92,49 @@ export default function DashboardScreen() {
     cachedUser.current = user;
 
     // Fetch from profiles table for the correct name
-    const { data: profile } = await supabase
+    const { data: profile, error } = await supabase
       .from('profiles')
       .select('full_name')
       .eq('id', user.id)
       .single();
 
-    if (profile?.full_name) {
+    if (profile?.full_name && profile.full_name !== 'Citizen') {
       setUserName(profile.full_name.split(' ')[0]);
+    } else {
+      // Profile missing or has generic name
+      const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
+      const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+
+      if (!profile && !error || (error && (error as any).code === 'PGRST116')) {
+        // Attempt to create profile from user metadata if it's missing
+        const county = user.user_metadata?.county || '';
+
+        const { data: newProfile, error: createError } = await supabase
+          .from('profiles')
+          .insert({
+            id: user.id,
+            full_name: fullName,
+            email: user.email,
+            avatar_url: avatarUrl,
+            location_name: county,
+            role: 'reporter'
+          })
+          .select()
+          .single();
+
+        if (!createError && newProfile) {
+          setUserName(newProfile.full_name?.split(' ')[0] || 'Citizen');
+        }
+      } else if (profile?.full_name === 'Citizen' && fullName !== 'Citizen') {
+        // Update generic name with metadata name
+        await supabase.from('profiles').update({
+          full_name: fullName,
+          avatar_url: avatarUrl
+        }).eq('id', user.id);
+        setUserName(fullName.split(' ')[0]);
+      } else if (profile?.full_name) {
+        setUserName(profile.full_name.split(' ')[0]);
+      }
     }
   };
 
@@ -125,6 +160,9 @@ export default function DashboardScreen() {
     isRequestingLocation.current = true;
 
     try {
+      // Small delay to ensure the screen is fully mounted and animations finished
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
       const { status: currentStatus } = await Location.getForegroundPermissionsAsync();
       let finalStatus = currentStatus;
 
@@ -134,7 +172,9 @@ export default function DashboardScreen() {
       }
 
       if (finalStatus === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced
+        });
         setUserLocation(loc);
       }
     } catch (e) {
@@ -237,6 +277,17 @@ export default function DashboardScreen() {
         setSosActive(false);
         Alert.alert('Authentication Required', 'Please log in to use SOS feature.');
         return;
+      }
+
+      // Ensure profile exists (Safety check to prevent FK error)
+      const { data: profile } = await supabase.from('profiles').select('id').eq('id', user.id).single();
+      if (!profile) {
+        await supabase.from('profiles').insert({
+          id: user.id,
+          full_name: user.user_metadata?.full_name || 'Citizen',
+          email: user.email,
+          role: 'reporter'
+        });
       }
 
       // Use cached location if available for instant response, fetch fresh in background

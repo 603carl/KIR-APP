@@ -178,18 +178,15 @@ export default function AlertsScreen() {
         loadLocalData();
         fetchNotifications();
 
-        const subscription = supabase
-            .channel('public:notifications_alerts')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-                fetchNotifications();
-            })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
+        // Local broadcast channel for syncing between components
+        const localChannel = supabase.channel('local-sync')
+            .on('broadcast', { event: 'refresh-unread-count' }, () => {
                 fetchNotifications();
             })
             .subscribe();
 
         return () => {
-            supabase.removeChannel(subscription);
+            localChannel.unsubscribe();
         };
     }, []);
 
@@ -279,10 +276,11 @@ export default function AlertsScreen() {
                 await supabase.from('notifications').update({ is_read: true }).eq('id', id);
             }
 
-            // Update local state immediately for responsiveness
-            setNotifications(prev =>
-                prev.map(n => n.id === id ? { ...n, is_read: true } : n)
-            );
+            // Sync with other components (Tabs badge)
+            supabase.channel('local-sync').send({
+                type: 'broadcast',
+                event: 'refresh-unread-count',
+            });
         } catch (e) {
             console.error('Mark read error:', e);
         }
@@ -299,9 +297,15 @@ export default function AlertsScreen() {
                 setDeletedIds(updatedDeleted);
                 await SecureStore.setItemAsync('deleted_notifications', JSON.stringify(updatedDeleted));
             } else {
-                // Delete from server
-                await supabase.from('notifications').delete().eq('id', id);
+                // For personal notifications, mark as read on server so count updates
+                await supabase.from('notifications').update({ is_read: true }).eq('id', id);
             }
+
+            // Sync with other components
+            supabase.channel('local-sync').send({
+                type: 'broadcast',
+                event: 'refresh-unread-count',
+            });
 
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } catch (e) {
@@ -340,6 +344,12 @@ export default function AlertsScreen() {
 
             // Update local state
             setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+
+            // Sync with other components
+            supabase.channel('local-sync').send({
+                type: 'broadcast',
+                event: 'refresh-unread-count',
+            });
         } catch (error) {
             console.error('Error marking all as read:', error);
         }
@@ -383,6 +393,14 @@ export default function AlertsScreen() {
     };
 
     const unreadCount = notifications.filter(n => !n.is_read).length;
+
+    useEffect(() => {
+        if (!loading) {
+            import('expo-notifications').then(Notifications => {
+                Notifications.setBadgeCountAsync(unreadCount).catch(() => { });
+            });
+        }
+    }, [unreadCount, loading]);
 
     if (loading) {
         return null; // Return nothing to avoid "loading states" as requested for speed

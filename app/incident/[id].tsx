@@ -134,6 +134,8 @@ export default function IncidentDetailsScreen() {
 
             if (error) throw error;
             setCommentText('');
+            // Manual refresh for instant feedback even with real-time subscription
+            fetchComments();
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Failed to post comment');
         } finally {
@@ -213,8 +215,8 @@ export default function IncidentDetailsScreen() {
     return (
         <KeyboardAvoidingView
             style={{ flex: 1, backgroundColor: COLORS.white }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 20}
         >
             <View style={styles.container}>
                 <Stack.Screen options={{ headerShown: false }} />
