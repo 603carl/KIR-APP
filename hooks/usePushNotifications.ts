@@ -2,28 +2,106 @@ import { supabase } from '@/lib/supabase';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import * as TaskManager from 'expo-task-manager';
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
+import type { ForegroundOptionsModel } from 'react-native-full-screen-notification-incoming-call';
+import RNIncomingCall from 'react-native-full-screen-notification-incoming-call';
 
-// Configure how notifications are handled when the app is foregrounded
+// ─── Constants ───────────────────────────────────────────────────────
+const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_EMERGENCY_NOTIFICATION';
+
+// ─── Notification Handler (Foreground) ───────────────────────────────
 Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-    }),
+    handleNotification: async (notification) => {
+        const data = notification.request.content.data as any;
+
+        // If it's a broadcast, trigger FSI on Android for maximum visibility
+        if (Platform.OS === 'android' && data?.isBroadcast) {
+            triggerFullScreenAlert(data);
+        }
+
+        return {
+            shouldShowAlert: true,
+            shouldShowBanner: true,
+            shouldShowList: true,
+            shouldPlaySound: true,
+            shouldSetBadge: true,
+        };
+    },
 });
 
+// ─── Background Notification Task ────────────────────────────────────
+// This fires when a push arrives while the app is killed or in background.
+// It's the key to "phone takeover" — we trigger the native FSI from here.
+TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
+    if (error) {
+        console.error('[BG Task] Error:', error);
+        return;
+    }
+
+    const notificationData = (data as any)?.notification?.data;
+    if (!notificationData) return;
+
+    console.log('[BG Task] Background notification received:', JSON.stringify(notificationData));
+
+    // Only trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
+    if (notificationData.isBroadcast && Platform.OS === 'android') {
+        triggerFullScreenAlert(notificationData);
+    }
+});
+
+// Register the background task
+Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK).catch((err) => {
+    console.log('[BG Task] Registration (may already be registered):', err?.message);
+});
+
+// ─── Full-Screen Alert Trigger (Android Native) ──────────────────────
+// This uses the native Android FSI library to wake the screen,
+// play alarm, and show a full-screen UI even when locked
+function triggerFullScreenAlert(data: any) {
+    try {
+        const title = data.title || '📢 Emergency Broadcast';
+        const message = data.message || 'An emergency broadcast has been issued.';
+        const uuid = data.broadcastId || `broadcast-${Date.now()}`;
+
+        console.log('[FSI] Triggering full-screen emergency alert:', uuid);
+
+        const foregroundOptions: ForegroundOptionsModel = {
+            channelId: 'emergency-broadcasts',
+            channelName: 'Emergency Broadcasts',
+            notificationIcon: 'ic_notification', // Android mipmap icon
+            notificationTitle: title,
+            notificationBody: message,
+            answerText: 'VIEW ALERT',
+            declineText: 'DISMISS',
+            notificationColor: '#FF0000',
+            notificationSound: 'emergency_alert', // raw sound resource name
+            payload: JSON.stringify(data),
+        };
+
+        RNIncomingCall.displayNotification(
+            uuid,       // unique call ID
+            null,       // avatar URI (null = use default icon)
+            30000,      // timeout in ms (30s — then it drops to heads-up)
+            foregroundOptions,
+        );
+    } catch (err) {
+        console.error('[FSI] Failed to trigger full-screen alert:', err);
+    }
+}
+
+// ─── Interface ───────────────────────────────────────────────────────
 export interface NotificationBroadcastData {
     broadcastId?: string;
     title?: string;
     message?: string;
     severity?: 'extreme' | 'severe' | 'amber';
     isBroadcast?: boolean;
+    type?: string;
 }
 
+// ─── Hook ────────────────────────────────────────────────────────────
 export function usePushNotifications(onBroadcastReceived?: (data: NotificationBroadcastData) => void) {
     const notificationListener = useRef<Notifications.Subscription | null>(null);
     const responseListener = useRef<Notifications.Subscription | null>(null);
@@ -32,6 +110,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         let token;
 
         if (Platform.OS === 'android') {
+            // Create high-priority notification channel for emergency broadcasts
             await Notifications.setNotificationChannelAsync('emergency-broadcasts', {
                 name: 'Emergency Broadcasts',
                 importance: Notifications.AndroidImportance.MAX,
@@ -43,13 +122,27 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                 showBadge: true,
                 enableVibrate: true,
             });
+
+            // Also create a default channel for non-emergency notifications
+            await Notifications.setNotificationChannelAsync('default', {
+                name: 'General',
+                importance: Notifications.AndroidImportance.HIGH,
+                showBadge: true,
+            });
         }
 
         if (Device.isDevice) {
             const { status: existingStatus } = await Notifications.getPermissionsAsync();
             let finalStatus = existingStatus;
             if (existingStatus !== 'granted') {
-                const { status } = await Notifications.requestPermissionsAsync();
+                const { status } = await Notifications.requestPermissionsAsync({
+                    ios: {
+                        allowAlert: true,
+                        allowBadge: true,
+                        allowSound: true,
+                        allowCriticalAlerts: true,  // iOS: Request critical alert permission
+                    },
+                });
                 finalStatus = status;
             }
             if (finalStatus !== 'granted') {
@@ -97,18 +190,18 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
 
         syncToken();
 
-        // Listen for auth state changes to re-sync (crucial after login/signup)
+        // Re-sync on auth state changes
         const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event) => {
             if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
                 syncToken();
             }
         });
 
+        // ─── Notification Data Extractor ─────────────────────────────
         const handleNotificationData = (notification: Notifications.Notification) => {
             const data = notification.request.content.data as NotificationBroadcastData;
-            // Detect if this is a broadcast alert
             if (data && (data.broadcastId || data.severity || data.isBroadcast)) {
-                console.log('Detected emergency signal in notification data:', data);
+                console.log('[Push] Emergency signal detected in notification:', JSON.stringify(data));
                 onBroadcastReceived?.({
                     ...data,
                     title: data.title || notification.request.content.title || undefined,
@@ -117,17 +210,35 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             }
         };
 
-        // Listen for incoming notifications while the app is foregrounded
+        // ─── Foreground Notification Listener ────────────────────────
         notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-            console.log('Notification Received:', notification);
+            console.log('[Push] Notification Received (foreground):', notification.request.content.title);
             handleNotificationData(notification);
         });
 
-        // Listen for when a user taps on a notification
+        // ─── Notification Tap Listener ───────────────────────────────
+        // When user taps a notification — this is key for background/killed scenarios
         responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-            console.log('Notification Tapped:', response);
+            console.log('[Push] Notification Tapped:', response.notification.request.content.title);
             handleNotificationData(response.notification);
         });
+
+        // ─── FSI Library Event Listeners (Android) ───────────────────
+        // When user answers/dismisses the native FSI notification
+        if (Platform.OS === 'android') {
+            RNIncomingCall.addEventListener('answer', (payload: any) => {
+                console.log('[FSI] User answered emergency alert:', payload?.callUUID);
+                // Dismiss the native FSI — the in-app overlay will take over
+                RNIncomingCall.hideNotification();
+                // The app is now in foreground; the real-time subscription
+                // or the notification data will trigger the EmergencyBroadcastOverlay
+            });
+
+            RNIncomingCall.addEventListener('endCall', (payload: any) => {
+                console.log('[FSI] User dismissed emergency alert:', payload?.callUUID);
+                RNIncomingCall.hideNotification();
+            });
+        }
 
         return () => {
             authSubscription.unsubscribe();
@@ -136,6 +247,10 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             }
             if (responseListener.current) {
                 responseListener.current.remove();
+            }
+            if (Platform.OS === 'android') {
+                RNIncomingCall.removeEventListener('answer');
+                RNIncomingCall.removeEventListener('endCall');
             }
         };
     }, [onBroadcastReceived]);

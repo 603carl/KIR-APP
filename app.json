@@ -14,7 +14,17 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification",
+          "fetch",
+          "audio"
+        ]
+      },
+      "entitlements": {
+        "com.apple.developer.usernotifications.critical-alerts": true
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -59,7 +69,15 @@
       ],
       "@react-native-google-signin/google-signin/app.plugin.js",
       "expo-asset",
-      "./plugins/withAndroidFullScreen"
+      "./plugins/withAndroidFullScreen",
+      [
+        "react-native-full-screen-notification-incoming-call",
+        {
+          "channelId": "emergency-broadcasts",
+          "channelName": "Emergency Broadcasts",
+          "notificationColor": "#FF0000"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

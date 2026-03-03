@@ -36,6 +36,7 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
 }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [sound, setSound] = useState<expoAudio.Audio.Sound | null>(null);
+    const vibrationInterval = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         if (alert) {
@@ -45,9 +46,19 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
         } else {
             setIsVisible(false);
             stopSound();
+            Vibration.cancel();
+            if (vibrationInterval.current) {
+                clearInterval(vibrationInterval.current);
+                vibrationInterval.current = null;
+            }
         }
         return () => {
             stopSound();
+            Vibration.cancel();
+            if (vibrationInterval.current) {
+                clearInterval(vibrationInterval.current);
+                vibrationInterval.current = null;
+            }
         };
     }, [alert]);
 
@@ -131,11 +142,10 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
 
     const triggerExtremeAlertSequence = () => {
         if (alert?.severity === 'extreme') {
-            const interval = setInterval(() => {
+            vibrationInterval.current = setInterval(() => {
                 Vibration.vibrate([0, 1000, 500, 1000], false);
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
             }, 3000);
-            return () => clearInterval(interval);
         } else if (alert?.severity === 'severe') {
             Vibration.vibrate([0, 800, 400, 800], true);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);

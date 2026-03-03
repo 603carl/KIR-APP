@@ -12,11 +12,12 @@ import { COLORS } from '@/constants/Theme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { supabase } from '@/lib/supabase';
 import { useAssets } from 'expo-asset';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useRouter, useSegments } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, AppState, Linking, Platform, Text, TouchableOpacity, View } from 'react-native';
 
 
 export {
@@ -25,7 +26,6 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-    // Ensure that reloading on `/modal` keeps a back button present.
     initialRouteName: '(tabs)',
 };
 
@@ -57,16 +57,31 @@ export default function RootLayout() {
     const lastBackgroundTime = useRef<number | null>(null);
     const autoSignOutTimeout = useRef<number>(30); // Default 30s
 
-    // Register for push notifications
-    usePushNotifications((data) => {
+    // ─── Push Notification Handler (SINGLE instance) ─────────────────
+    // When a broadcast push is received or tapped, this triggers the overlay
+    const handleBroadcastReceived = useCallback((data: any) => {
+        if (!data) return;
+        console.log('[Layout] Broadcast received from push:', JSON.stringify(data));
         setActiveBroadcast({
             id: data.broadcastId || 'push-' + Date.now(),
             title: data.title || 'Emergency Alert',
             message: data.message || '',
-            severity: data.severity || 'severe',
+            severity: data.severity || 'extreme',
             created_at: new Date().toISOString()
         });
-    });
+    }, []);
+
+    // Single hook call — the ONLY place usePushNotifications is called
+    usePushNotifications(handleBroadcastReceived);
+
+    // ─── Keep Screen Awake During Emergency ──────────────────────────
+    useEffect(() => {
+        if (activeBroadcast) {
+            activateKeepAwakeAsync('emergency-broadcast').catch(() => { });
+        } else {
+            deactivateKeepAwake('emergency-broadcast');
+        }
+    }, [activeBroadcast]);
 
     // Expo Router uses Error Boundaries to catch errors in the navigation tree.
     useEffect(() => {
@@ -87,13 +102,13 @@ export default function RootLayout() {
 
                 const session = sessionRes.data.session;
 
-                // 2. Set Install Date if missing - CRITICAL for notification filtering
+                // 2. Set Install Date if missing
                 if (!installDate) {
                     const now = new Date().toISOString();
                     await SecureStore.setItemAsync('install_date', now);
                 }
 
-                // 3. Routing Logic (Instant)
+                // 3. Routing Logic
                 const inAuthGroup = segments[0] === 'auth';
                 const inOnboarding = segments[0] === 'onboarding';
 
@@ -105,9 +120,8 @@ export default function RootLayout() {
                     router.replace('/(tabs)');
                 }
 
-                // 4. Biometric Lock Check (Deferred slightly to allow UI to settle)
+                // 4. Profile, Biometric Lock & Role Check
                 if (session?.user) {
-                    // Wrap in timeout to avoid thread lock during navigation
                     setTimeout(async () => {
                         try {
                             const { data: profile } = await supabase
@@ -132,6 +146,11 @@ export default function RootLayout() {
                                     autoSignOutTimeout.current = profile.privacy_settings.auto_sign_out_timeout;
                                 }
                             }
+
+                            // Android 14+: Check FSI permission and prompt if needed
+                            if (Platform.OS === 'android' && Platform.Version >= 34) {
+                                promptForFSIPermission();
+                            }
                         } catch (bioError) {
                             console.log('Biometric error:', bioError);
                         }
@@ -142,8 +161,6 @@ export default function RootLayout() {
                 console.error('Init Error:', e);
             } finally {
                 setIsNavigationReady(true);
-                // CRITICAL: Hide splash only AFTER initial route is determined 
-                // and using a small delay to ensure React Navigation has mounted the screen
                 setTimeout(async () => {
                     await SplashScreen.hideAsync().catch(() => { });
                 }, 100);
@@ -152,7 +169,7 @@ export default function RootLayout() {
 
         initAndCheckNavigation();
 
-        // Global Broadcast Listener
+        // ─── Global Broadcast Listener (Real-time from DB) ───────────
         const loadAcknowledgedIds = async () => {
             try {
                 const stored = await SecureStore.getItemAsync('acknowledged_broadcasts');
@@ -164,11 +181,13 @@ export default function RootLayout() {
         const broadcastSubscription = supabase
             .channel('global:emergency_sync')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
+                // Broadcast from Watch Command → triggers phone takeover for ALL users
                 const newBroadcast = payload.new as BroadcastAlert;
+                console.log('[Realtime] New broadcast received:', newBroadcast.title);
                 setActiveBroadcast(newBroadcast);
             })
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sos_alerts' }, (payload) => {
-                // RESTRICTION: Only show SOS overlay for Watch Command (Staff/Admin/Responder)
+                // SOS: Only Watch Command staff see the overlay
                 const sos = payload.new;
                 const isStaff = ['admin', 'responder', 'staff'].includes(userRoleRef.current || '');
 
@@ -184,11 +203,10 @@ export default function RootLayout() {
             })
             .subscribe();
 
-        // Auth state listener
+        // ─── Auth State Listener ─────────────────────────────────────
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             if (event === 'SIGNED_IN') {
                 router.replace('/(tabs)');
-                // Refresh role and timeout setting on login
                 if (session?.user) {
                     supabase.from('profiles')
                         .select('role, privacy_settings')
@@ -208,13 +226,12 @@ export default function RootLayout() {
             }
         });
 
-        // App State Listener for Auto Sign-Out
+        // ─── App State Listener for Auto Sign-Out ────────────────────
         const handleAppStateChange = async (nextAppState: any) => {
             if (
                 appState.current.match(/inactive|background/) &&
                 nextAppState === 'active'
             ) {
-                // App has come to the foreground
                 if (lastBackgroundTime.current && autoSignOutTimeout.current !== -1) {
                     const elapsedSeconds = (Date.now() - lastBackgroundTime.current) / 1000;
                     if (elapsedSeconds > autoSignOutTimeout.current) {
@@ -226,7 +243,6 @@ export default function RootLayout() {
             }
 
             if (nextAppState.match(/inactive|background/)) {
-                // App is going to the background
                 lastBackgroundTime.current = Date.now();
             }
 
@@ -242,19 +258,6 @@ export default function RootLayout() {
         };
     }, [loaded]);
 
-    // Initialize Push Notifications (Hook call must be top-level)
-    usePushNotifications((data) => {
-        if (data && data.title) {
-            setActiveBroadcast({
-                id: data.broadcastId || Math.random().toString(),
-                title: data.title,
-                message: data.message || '',
-                severity: data.severity || 'extreme',
-                created_at: new Date().toISOString()
-            });
-        }
-    });
-
     if (!loaded) return null;
 
     if (isLocked) {
@@ -262,7 +265,7 @@ export default function RootLayout() {
             <View style={{ flex: 1, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}>
                 <ActivityIndicator size="large" color="#ffffff" />
                 <TouchableOpacity
-                    onPress={() => setIsNavigationReady(false)} // Force re-run logic
+                    onPress={() => setIsNavigationReady(false)}
                     style={{ marginTop: 20, padding: 10 }}
                 >
                     <Text style={{ color: '#ffffff', fontWeight: 'bold' }}>Tap to Unlock</Text>
@@ -294,4 +297,29 @@ export default function RootLayout() {
             />
         </ThemeProvider>
     );
+}
+
+// ─── Android 14+ FSI Permission Prompt ──────────────────────────────
+// On Android 14+, USE_FULL_SCREEN_INTENT is a special permission.
+// We guide the user to enable it in Settings if not already enabled.
+function promptForFSIPermission() {
+    // Check if we've already prompted
+    SecureStore.getItemAsync('fsi_permission_prompted').then((prompted) => {
+        if (prompted) return; // Already prompted once
+
+        Alert.alert(
+            'Emergency Alert Permission',
+            'To receive critical emergency broadcasts that can wake your phone, please enable "Full Screen Notifications" for this app in your device Settings.\n\nThis is essential for your safety.',
+            [
+                { text: 'Later', style: 'cancel' },
+                {
+                    text: 'Open Settings',
+                    onPress: () => {
+                        Linking.openSettings();
+                        SecureStore.setItemAsync('fsi_permission_prompted', 'true');
+                    }
+                },
+            ]
+        );
+    });
 }
