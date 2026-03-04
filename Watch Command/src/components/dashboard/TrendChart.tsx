@@ -31,7 +31,7 @@ const generateStatTrend = (incidents: any[]) => {
     });
 
     const count = hourIncidents.length;
-    const resolved = hourIncidents.filter(inc => inc.status === 'resolved' || inc.status === 'closed').length;
+    const resolved = hourIncidents.filter(inc => inc.status === 'Resolved' || inc.status === 'Closed' || inc.status === 'Rejected').length;
     const critical = hourIncidents.filter(inc => inc.severity === 'critical' || inc.severity === 'high').length;
 
     data.push({

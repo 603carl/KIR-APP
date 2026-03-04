@@ -57,36 +57,8 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         refetchInterval: options?.refreshInterval ? options.refreshInterval * 1000 : false,
     });
 
-    const { data: reporterCount = 0 } = useQuery({
-        queryKey: ['reporter_count'],
-        queryFn: async () => {
-            const { count, error } = await supabase
-                .from('profiles')
-                .select('*', { count: 'exact', head: true });
-            if (error) throw error;
-            return count || 0;
-        }
-    });
-
-    const { data: prevReporterCount = 0 } = useQuery({
-        queryKey: ['prev_reporter_count', filters?.dateRange],
-        queryFn: async () => {
-            const now = new Date();
-            const cutoff = new Date();
-            if (filters?.dateRange === 'week') cutoff.setDate(now.getDate() - 7);
-            else if (filters?.dateRange === 'month') cutoff.setDate(now.getDate() - 30);
-            else if (filters?.dateRange === '90d') cutoff.setDate(now.getDate() - 90);
-            else if (filters?.dateRange === 'year') cutoff.setFullYear(now.getFullYear() - 1);
-            else return 0;
-
-            const { count, error } = await supabase
-                .from('profiles')
-                .select('*', { count: 'exact', head: true })
-                .lt('created_at', cutoff.toISOString());
-            if (error) throw error;
-            return count || 0;
-        }
-    });
+    const reporterCount = new Set(incidents.map(i => i.reporter.id)).size;
+    const prevReporterCount = 0; // Simplified for now as we don't have historical active user tracking easily
 
     const { data: rawTimeline = [] } = useQuery({
         queryKey: ['dashboard_timeline'],
@@ -432,13 +404,77 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         return data;
     };
 
+    const getResponseSparkline = () => {
+        const data = [];
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            date.setHours(0, 0, 0, 0);
+            const nextDate = new Date(date);
+            nextDate.setDate(date.getDate() + 1);
+
+            const dayIncidents = incidents.filter(inc => {
+                const incDate = new Date(inc.createdAt);
+                return incDate >= date && incDate < nextDate;
+            });
+
+            if (dayIncidents.length === 0) {
+                data.push(0);
+                continue;
+            }
+
+            let sum = 0;
+            let count = 0;
+            dayIncidents.forEach(inc => {
+                const update = rawTimeline.find(t =>
+                    t.incident_id === inc.id &&
+                    (t.title?.toLowerCase().includes('status') || t.title?.toLowerCase().includes('assign'))
+                );
+                if (update) {
+                    const diff = (new Date(update.created_at).getTime() - new Date(inc.createdAt).getTime()) / 60000;
+                    if (diff > 0) {
+                        sum += diff;
+                        count++;
+                    }
+                }
+            });
+            data.push(count > 0 ? Math.round(sum / count) : 0);
+        }
+        return data;
+    };
+
+    const getResolutionSparkline = () => {
+        const data = [];
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            date.setHours(0, 0, 0, 0);
+            const nextDate = new Date(date);
+            nextDate.setDate(date.getDate() + 1);
+
+            const dayIncidents = incidents.filter(inc => {
+                const incDate = new Date(inc.createdAt);
+                return incDate >= date && incDate < nextDate;
+            });
+
+            if (dayIncidents.length === 0) {
+                data.push(0);
+                continue;
+            }
+
+            const resolved = dayIncidents.filter(inc => ['Resolved', 'Closed', 'Rejected'].includes(inc.status)).length;
+            data.push(Math.round((resolved / dayIncidents.length) * 100));
+        }
+        return data;
+    };
+
     const sparklines = {
         total: getSparklineData(() => true),
         active: getSparklineData(i => !['Resolved', 'Closed', 'Rejected'].includes(i.status as string)),
         resolved: getSparklineData(i => ['Resolved', 'Closed', 'Rejected'].includes(i.status as string)),
         critical: getSparklineData(i => i.severity === 'critical' || i.severity === 'high'),
-        response: Array(7).fill(0),
-        resolutionRate: Array(7).fill(0)
+        response: getResponseSparkline(),
+        resolutionRate: getResolutionSparkline()
     };
 
     const { data: unacknowledgedAlertsCount = 0 } = useQuery({
