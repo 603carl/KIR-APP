@@ -1,0 +1,408 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Kenya Incident Reporter - Command Center Design System
+   Dark-mode first, operations-focused interface */
+
+@layer base {
+  :root {
+    /* Light mode (secondary) */
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 220 70% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 220 70% 50%;
+    --radius: 0.5rem;
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 8%;
+    --sidebar-foreground: 210 20% 90%;
+    --sidebar-primary: 220 70% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 47% 14%;
+    --sidebar-accent-foreground: 210 20% 90%;
+    --sidebar-border: 222 47% 16%;
+    --sidebar-ring: 220 70% 50%;
+  }
+
+  .dark {
+    /* Primary dark theme - Command Center */
+    --background: 222 47% 6%;
+    --foreground: 210 20% 95%;
+    --card: 222 47% 8%;
+    --card-foreground: 210 20% 95%;
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 20% 95%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 6%;
+    --secondary: 222 47% 12%;
+    --secondary-foreground: 210 20% 90%;
+    --muted: 222 47% 14%;
+    --muted-foreground: 215 20% 55%;
+    --accent: 222 47% 16%;
+    --accent-foreground: 210 20% 95%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 47% 16%;
+    --input: 222 47% 16%;
+    --ring: 217 91% 60%;
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 5%;
+    --sidebar-foreground: 210 20% 90%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 47% 10%;
+    --sidebar-accent-foreground: 210 20% 90%;
+    --sidebar-border: 222 47% 12%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+/* Operational Status Colors */
+@layer base {
+
+  :root,
+  .dark {
+    /* Severity Colors */
+    --severity-critical: 0 84% 60%;
+    --severity-critical-bg: 0 84% 15%;
+    --severity-high: 25 95% 53%;
+    --severity-high-bg: 25 95% 15%;
+    --severity-medium: 45 93% 47%;
+    --severity-medium-bg: 45 93% 12%;
+    --severity-low: 142 71% 45%;
+    --severity-low-bg: 142 71% 12%;
+    --severity-info: 217 91% 60%;
+    --severity-info-bg: 217 91% 15%;
+
+    /* Status Colors */
+    --status-active: 142 71% 45%;
+    --status-pending: 45 93% 47%;
+    --status-in-progress: 262 83% 58%;
+    --status-resolved: 217 91% 60%;
+    --status-closed: 215 20% 45%;
+
+    /* Category Colors */
+    --category-water: 199 89% 48%;
+    --category-roads: 25 95% 53%;
+    --category-power: 45 93% 47%;
+    --category-health: 0 84% 60%;
+    --category-security: 262 83% 58%;
+    --category-corruption: 339 90% 51%;
+    --category-environment: 142 71% 45%;
+    --category-other: 215 20% 55%;
+
+    /* Chart Colors */
+    --chart-1: 217 91% 60%;
+    --chart-2: 142 71% 45%;
+    --chart-3: 45 93% 47%;
+    --chart-4: 0 84% 60%;
+    --chart-5: 262 83% 58%;
+    --chart-6: 199 89% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Mono font for data */
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom Scrollbar for Command Center */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted));
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground));
+  }
+}
+
+/* Live Pulse Animation */
+@keyframes pulse-live {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 5px hsl(var(--severity-critical) / 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 20px hsl(var(--severity-critical) / 0.8), 0 0 30px hsl(var(--severity-critical) / 0.4);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes count-up {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer utilities {
+  .animate-pulse-live {
+    animation: pulse-live 2s ease-in-out infinite;
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.3s ease-out;
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.4s ease-out;
+  }
+
+  .animate-count-up {
+    animation: count-up 0.5s ease-out;
+  }
+
+  .animate-scan {
+    animation: scan 10s linear infinite;
+  }
+
+  .animate-glow-border {
+    animation: glow-border 4s ease-in-out infinite;
+  }
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(-100vh);
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  90% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+
+@keyframes glow-border {
+
+  0%,
+  100% {
+    border-color: hsl(var(--primary) / 0.2);
+    box-shadow: 0 0 5px hsl(var(--primary) / 0.1);
+  }
+
+  50% {
+    border-color: hsl(var(--primary) / 0.6);
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+}
+
+@keyframes text-flicker {
+  0% {
+    opacity: 1;
+  }
+
+  1% {
+    opacity: 0.4;
+  }
+
+  2% {
+    opacity: 1;
+  }
+
+  99% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.8;
+  }
+}
+
+.hud-corner {
+  @apply absolute w-4 h-4 border-primary/40 pointer-events-none;
+}
+
+.hud-corner-tl {
+  @apply top-0 left-0 border-t-2 border-l-2;
+}
+
+.hud-corner-tr {
+  @apply top-0 right-0 border-t-2 border-r-2;
+}
+
+.hud-corner-bl {
+  @apply bottom-0 left-0 border-b-2 border-l-2;
+}
+
+.hud-corner-br {
+  @apply bottom-0 right-0 border-b-2 border-r-2;
+}
+
+.scanning-laser {
+  @apply fixed left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent z-[100] pointer-events-none shadow-[0_0_15px_hsl(var(--primary))];
+}
+
+/* Severity Badge Backgrounds */
+.severity-critical {
+  @apply bg-[hsl(var(--severity-critical-bg))] text-[hsl(var(--severity-critical))] border border-[hsl(var(--severity-critical)/0.3)];
+}
+
+.severity-high {
+  @apply bg-[hsl(var(--severity-high-bg))] text-[hsl(var(--severity-high))] border border-[hsl(var(--severity-high)/0.3)];
+}
+
+.severity-medium {
+  @apply bg-[hsl(var(--severity-medium-bg))] text-[hsl(var(--severity-medium))] border border-[hsl(var(--severity-medium)/0.3)];
+}
+
+.severity-low {
+  @apply bg-[hsl(var(--severity-low-bg))] text-[hsl(var(--severity-low))] border border-[hsl(var(--severity-low)/0.3)];
+}
+
+.severity-info {
+  @apply bg-[hsl(var(--severity-info-bg))] text-[hsl(var(--severity-info))] border border-[hsl(var(--severity-info)/0.3)];
+}
+
+/* Glassmorphism effect for cards */
+.glass-card {
+  @apply bg-card/80 backdrop-blur-xl border border-border/50;
+}
+
+/* Grid pattern background */
+.grid-pattern {
+  background-image:
+    linear-gradient(hsl(var(--border)/0.3) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border)/0.3) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* Gradient overlays */
+.gradient-radial {
+  background: radial-gradient(ellipse at top, hsl(var(--primary)/0.1) 0%, transparent 50%);
+}
+
+/* Compact Mode Adaptations */
+.compact-mode main {
+  @apply p-2 lg:p-3;
+}
+
+.compact-mode .card-header {
+  @apply py-3 px-4;
+}
+
+.compact-mode .card-content {
+  @apply py-3 px-4;
+}
+
+.compact-mode h1 {
+  @apply text-xl;
+}
+
+.compact-mode .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  @apply mt-2;
+}
+
+.compact-mode .gap-4 {
+  @apply gap-2;
+}
+
+.compact-mode .py-24 {
+  @apply py-12;
+}
