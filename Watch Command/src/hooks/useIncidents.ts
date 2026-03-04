@@ -290,7 +290,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         };
     });
 
-    // Fetch list of all counties for "Zero Reporting" support
+    // Fetch list of all counties for \"Zero Reporting\" support
     const { data: allCounties = [] } = useQuery({
         queryKey: ['counties_master_list'],
         queryFn: async () => {
@@ -306,9 +306,10 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         },
         staleTime: Infinity
     });
+
     const countyStats = allCounties?.length > 0 ? allCounties.map(c => {
         const countyName = (c as any).name || 'Unknown';
-        // Normalize comparison (case-insensitive and handling "City" suffix for Nairobi/Mombasa)
+        // Normalize comparison (case-insensitive and handling \"City\" suffix for Nairobi/Mombasa)
         const relevantIncidents = incidents.filter(i => {
             const incLoc = (i.location.county || '').toLowerCase();
             const searchName = countyName.toLowerCase();
@@ -382,12 +383,9 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             resolutionRate: total > 0 ? parseFloat(((resolved / total) * 100).toFixed(1)) : 0,
             trend: trend
         };
-    }).sort((a, b) => b.totalReports - a.totalReports)
-        :
-        // Fallback if counties table fetch fails (uses existing reduction logic)
-        incidents.reduce((acc: any[], incident) => {
+    }).sort((a: any, b: any) => b.totalReports - a.totalReports)
+        : incidents.reduce((acc: any[], incident) => {
             const rowCounty = incident.location.county || 'Unknown';
-            // Simple normalization for fallback: use first part of comma-separated string if it looks like an address
             const county = rowCounty.includes(',') ? rowCounty.split(',').pop()?.trim() || rowCounty : rowCounty;
 
             const existing = acc.find((a: any) =>
@@ -398,14 +396,14 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
 
             if (existing) {
                 existing.totalReports++;
-                if (!['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(incident.status)) existing.activeReports++;
+                if (!['Resolved', 'Closed', 'Rejected'].includes(incident.status)) existing.activeReports++;
                 else existing.resolvedReports++;
             } else {
                 acc.push({
                     county,
                     totalReports: 1,
-                    activeReports: !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(incident.status) ? 1 : 0,
-                    resolvedReports: ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(incident.status) ? 1 : 0,
+                    activeReports: !['Resolved', 'Closed', 'Rejected'].includes(incident.status) ? 1 : 0,
+                    resolvedReports: ['Resolved', 'Closed', 'Rejected'].includes(incident.status) ? 1 : 0,
                     trend: 0,
                     avgResponseTime: 45,
                     resolutionRate: 0
@@ -436,11 +434,11 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
 
     const sparklines = {
         total: getSparklineData(() => true),
-        active: getSparklineData(i => !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)),
-        resolved: getSparklineData(i => ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)),
+        active: getSparklineData(i => !['Resolved', 'Closed', 'Rejected'].includes(i.status as string)),
+        resolved: getSparklineData(i => ['Resolved', 'Closed', 'Rejected'].includes(i.status as string)),
         critical: getSparklineData(i => i.severity === 'critical' || i.severity === 'high'),
-        response: Array(7).fill(0), // Placeholder for real time-series if available
-        resolutionRate: Array(7).fill(0) // Placeholder for real time-series if available
+        response: Array(7).fill(0),
+        resolutionRate: Array(7).fill(0)
     };
 
     const { data: unacknowledgedAlertsCount = 0 } = useQuery({
@@ -467,7 +465,6 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         },
     });
 
-    // Subscriptions for alerts and SOS
     useEffect(() => {
         const alertsChannel = supabase
             .channel('alerts_count_sync')
@@ -489,9 +486,6 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         };
     }, [queryClient]);
 
-    const resolvedCount = incidents.filter(i => ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length;
-
-    // Fetch totals for the previous period to calculate real trends
     const now = new Date();
     const cutoff = new Date();
     const prevStart = new Date();
@@ -513,7 +507,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         prevStart.setDate(now.getDate() - 1);
         prevStart.setHours(0, 0, 0, 0);
     } else {
-        cutoff.setFullYear(2000); // All time
+        cutoff.setFullYear(2000);
         prevStart.setFullYear(2000);
     }
 
@@ -523,17 +517,16 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         return d >= prevStart && d < cutoff;
     });
 
-
-    const currentResolved = currentPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length;
+    const currentResolved = currentPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length;
     const resolutionRate = currentPeriodIncidents.length > 0 ? (currentResolved / currentPeriodIncidents.length) * 100 : 0;
 
     const stats: IncidentStats = {
         total: currentPeriodIncidents.length,
-        active: currentPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length,
+        active: currentPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length,
         resolvedToday: currentPeriodIncidents.filter(i => {
             const date = new Date(i.updatedAt);
             const today = new Date();
-            return ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status) &&
+            return ['Resolved', 'Closed', 'Rejected'].includes(i.status as string) &&
                 date.getDate() === today.getDate() &&
                 date.getMonth() === today.getMonth() &&
                 date.getFullYear() === today.getFullYear();
@@ -547,12 +540,12 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         trend: {
             total: calculateTrend(currentPeriodIncidents.length, prevPeriodIncidents.length),
             active: calculateTrend(
-                currentPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length,
-                prevPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length
+                currentPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length,
+                prevPeriodIncidents.filter(i => !['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length
             ),
             resolved: calculateTrend(
-                currentPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length,
-                prevPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)).length
+                currentPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length,
+                prevPeriodIncidents.filter(i => ['Resolved', 'Closed', 'Rejected'].includes(i.status as string)).length
             ),
             critical: calculateTrend(
                 currentPeriodIncidents.filter(i => i.severity === 'critical' || i.severity === 'high').length,
@@ -563,8 +556,6 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         sparklines
     };
 
-    // Generate activities from recent incidents
-    // Generate activities from recent incidents AND timeline
     const incidentActivities = incidents
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(0, 10)
@@ -597,7 +588,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             incident: {
                 id: item.incident_id,
                 title: item.incidents?.title || 'Unknown Incident',
-                severity: item.incidents?.severity || 'info', // Fallback if join misses
+                severity: item.incidents?.severity || 'info',
                 category: item.incidents?.category || 'other'
             },
             details: item.description || item.title,
