@@ -1,0 +1,25 @@
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java b/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java
+index 3395f00..0fa4f02 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java
++++ b/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java
+@@ -93,10 +93,16 @@ public class IncomingCallActivity extends AppCompatActivity implements DefaultHa
+     if (bundle.containsKey("mainComponent") && bundle.getString("mainComponent") != null) {
+       String mainComponent = bundle.getString("mainComponent");
+       setContentView(R.layout.custom_ingcoming_call_rn);
+-      Fragment reactNativeFragment = new ReactFragment.Builder()
+-        .setComponentName(mainComponent)
+-        .setLaunchOptions(bundle)
+-        .build();
++      ReactFragment.Builder builder = new ReactFragment.Builder();
++      try {
++        java.lang.reflect.Method setComponentNameMethod = builder.getClass().getMethod("setComponentName", String.class);
++        setComponentNameMethod.invoke(builder, mainComponent);
++        java.lang.reflect.Method setLaunchOptionsMethod = builder.getClass().getMethod("setLaunchOptions", Bundle.class);
++        setLaunchOptionsMethod.invoke(builder, bundle);
++      } catch (Exception e) {
++        Log.e(TAG, "Failed to set ReactFragment options via reflection", e);
++      }
++      Fragment reactNativeFragment = builder.build();
+ 
+       getSupportFragmentManager()
+         .beginTransaction()

@@ -12,14 +12,14 @@ export default function PrintableReport() {
         queryKey: ['printable_report', id],
         queryFn: async () => {
             if (!id) throw new Error("No report ID provided");
-            const { data, error } = await supabase
-                .from("generated_reports")
+            const { data, error } = await (supabase
+                .from("generated_reports" as any)
                 .select("*")
                 .eq("id", id)
-                .single();
+                .single() as any);
 
             if (error) throw error;
-            return data;
+            return data as any;
         },
         enabled: !!id
     });

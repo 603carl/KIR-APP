@@ -150,7 +150,7 @@ export default function LoginScreen() {
 
             if (data.session) {
                 if (data.user) {
-                    await syncUserProfile(data.user);
+                    syncUserProfile(data.user).catch(err => console.error('Background sync error:', err));
                 }
                 router.replace('/(tabs)');
             }

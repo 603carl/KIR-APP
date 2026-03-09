@@ -1,4 +1,4 @@
-import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
+import { COLORS, SHADOWS } from '@/constants/Theme';
 import { registerForPushNotificationsAsync, savePushToken, sendTestNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
@@ -285,10 +285,10 @@ export default function ProfileScreen() {
         router.replace('/auth/login');
     };
 
-    const MenuItem = ({ icon: Icon, title, subtitle, onPress, showSwitch }: any) => (
+    const MenuItem = ({ icon: Icon, title, subtitle, onPress, showSwitch, value, onValueChange, iconColor = COLORS.primary, iconBg = '#F8F9FA' }: any) => (
         <TouchableOpacity style={styles.menuItem} onPress={onPress}>
-            <View style={styles.menuIconContainer}>
-                <Icon size={22} color={COLORS.primary} />
+            <View style={[styles.menuIconContainer, { backgroundColor: iconBg }]}>
+                <Icon size={20} color={iconColor} />
             </View>
             <View style={styles.menuTextContainer}>
                 <Text style={styles.menuTitle}>{title}</Text>
@@ -296,140 +296,218 @@ export default function ProfileScreen() {
             </View>
             {showSwitch ? (
                 <Switch
-                    trackColor={{ false: COLORS.border, true: COLORS.primary }}
+                    trackColor={{ false: '#E2E8F0', true: COLORS.primary }}
                     thumbColor={COLORS.white}
+                    value={value}
+                    onValueChange={onValueChange}
                 />
             ) : (
-                <ChevronRight size={18} color={COLORS.textMuted} />
+                <ChevronRight size={18} color="#CBD5E1" />
             )}
         </TouchableOpacity>
     );
 
     return (
         <View style={styles.container}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-                {/* Profile Header */}
-                <LinearGradient
-                    colors={[COLORS.primary, '#004D2C']}
-                    style={styles.headerGradient}
-                >
-                    <SafeAreaView edges={['top']} style={styles.headerContent}>
-                        <MotiView
-                            from={{ opacity: 0, translateY: -20 }}
-                            animate={{ opacity: 1, translateY: 0 }}
-                            style={styles.profileRow}
-                        >
-                            <TouchableOpacity style={styles.imageContainer} onPress={pickAvatar} disabled={uploading}>
-                                {uploading || loading ? (
-                                    <View style={[styles.profileImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-                                        <ActivityIndicator color={COLORS.white} />
+            <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ backgroundColor: COLORS.background }}
+            >
+                {/* Profile Header Block */}
+                <View style={styles.headerBlock}>
+                    <LinearGradient
+                        colors={['#006B3F', '#004D2C']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.headerGradient}
+                    >
+                        <SafeAreaView edges={['top']} style={styles.headerContent}>
+                            <MotiView
+                                from={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ type: 'spring', delay: 100 }}
+                                style={styles.profileRow}
+                            >
+                                <TouchableOpacity
+                                    style={styles.imageContainer}
+                                    onPress={pickAvatar}
+                                    disabled={uploading}
+                                    activeOpacity={0.9}
+                                >
+                                    {uploading || loading ? (
+                                        <View style={styles.profileImageSkeleton}>
+                                            <ActivityIndicator color={COLORS.white} />
+                                        </View>
+                                    ) : (
+                                        <Image
+                                            source={profile?.avatar_url ? { uri: profile.avatar_url } : { uri: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=200&auto=format&fit=crop' }}
+                                            style={styles.profileImage}
+                                        />
+                                    )}
+                                    <View style={styles.editBadge}>
+                                        <Star size={12} color={COLORS.white} fill={COLORS.white} />
                                     </View>
-                                ) : (
-                                    <Image
-                                        source={profile?.avatar_url ? { uri: profile.avatar_url } : require('@/assets/images/icon.png')}
-                                        style={styles.profileImage}
-                                    />
-                                )}
-                                <TouchableOpacity style={styles.editBadge} onPress={pickAvatar}>
-                                    <Award size={14} color={COLORS.white} />
                                 </TouchableOpacity>
-                            </TouchableOpacity>
-                            <View style={styles.nameContainer}>
-                                {loading ? (
-                                    <MotiView
-                                        from={{ opacity: 0.3 }}
-                                        animate={{ opacity: 0.7 }}
-                                        transition={{ loop: true, type: 'timing', duration: 1000 }}
-                                        style={{ width: 150, height: 28, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 8 }}
-                                    />
-                                ) : (
-                                    <>
-                                        <Text style={styles.name}>{profile?.full_name || 'Anonymous User'}</Text>
-                                        <Text style={styles.rank}>{profile?.role === 'responder' ? 'Official Responder' : 'Verified Citizen'} • {stats.topInterest}</Text>
-                                    </>
-                                )}
-                            </View>
-                        </MotiView>
 
-                        <View style={styles.statsOverview}>
-                            <View style={styles.statBox}>
-                                {loading ? <View style={styles.statSkeleton} /> : <Text style={styles.statNumber}>{stats.reports}</Text>}
-                                <Text style={styles.statLabel}>Reports</Text>
-                            </View>
-                            <View style={styles.statDivider} />
-                            <View style={styles.statBox}>
-                                {loading ? <View style={styles.statSkeleton} /> : <Text style={styles.statNumber}>{stats.resolved}</Text>}
-                                <Text style={styles.statLabel}>Resolved</Text>
-                            </View>
-                            <View style={styles.statDivider} />
-                            <View style={styles.statBox}>
-                                {loading ? <View style={styles.statSkeleton} /> : (
+                                <View style={styles.nameContainer}>
+                                    <Text style={styles.name}>{profile?.full_name || 'Citizen'}</Text>
+                                    <View style={styles.rankBadge}>
+                                        <Text style={styles.rankText}>Verified Citizen • {stats.topInterest}</Text>
+                                    </View>
+                                </View>
+                            </MotiView>
+
+                            {/* Floating Stats Card - Layered Depth */}
+                            <MotiView
+                                from={{ opacity: 0, translateY: 40 }}
+                                animate={{ opacity: 1, translateY: 0 }}
+                                transition={{ type: 'spring', delay: 300 }}
+                                style={styles.statsCard}
+                            >
+                                <View style={styles.statBox}>
+                                    <Text style={styles.statNumber}>{stats.reports}</Text>
+                                    <Text style={styles.statLabel}>Reports</Text>
+                                </View>
+                                <View style={styles.statDivider} />
+                                <View style={styles.statBox}>
+                                    <Text style={styles.statNumber}>{stats.resolved}</Text>
+                                    <Text style={styles.statLabel}>Resolved</Text>
+                                </View>
+                                <View style={styles.statDivider} />
+                                <View style={styles.statBox}>
                                     <View style={styles.scoreRow}>
                                         <Text style={styles.statNumber}>{stats.score}</Text>
-                                        {stats.velocity > 0 && <TrendingUp size={10} color={COLORS.success} />}
+                                        <TrendingUp size={12} color={COLORS.success} />
                                     </View>
-                                )}
-                                <Text style={styles.statLabel}>Impact Score</Text>
-                            </View>
-                        </View>
-                    </SafeAreaView>
-                </LinearGradient>
+                                    <Text style={styles.statLabel}>Impact Score</Text>
+                                </View>
+                            </MotiView>
+                        </SafeAreaView>
+                    </LinearGradient>
+                </View>
 
                 <View style={styles.content}>
                     <Text style={styles.sectionTitle}>Civic Achievements</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.achievementScroll}>
                         {[
-                            { id: '1', title: 'First Responder', icon: Star, color: COLORS.gold, earned: stats.isFirstResponder },
-                            { id: '2', title: 'Action Hero', icon: Award, color: '#10B981', earned: stats.resolved >= 20 },
-                            { id: '3', title: 'Verify Pro', icon: Shield, color: COLORS.primary, earned: stats.isCommunitySentinel },
+                            { id: '1', title: 'First Responder', icon: Star, color: COLORS.gold, earned: stats.isFirstResponder, subtitle: 'Elite Status' },
+                            { id: '2', title: 'Action Hero', icon: Award, color: '#10B981', earned: stats.resolved >= 5, subtitle: 'Problem Solver' },
+                            { id: '3', title: 'Verify Pro', icon: Shield, color: COLORS.primary, earned: stats.isCommunitySentinel, subtitle: 'Trustworthy' },
                         ].map(item => (
-                            <View key={item.id} style={[styles.achievementCard, !item.earned && { opacity: 0.5 }]}>
-                                <View style={[styles.achievementIcon, { backgroundColor: item.color + '20' }]}>
-                                    <item.icon size={24} color={item.earned ? item.color : COLORS.textMuted} />
-                                </View>
-                                <Text style={styles.achievementTitle}>{item.title}</Text>
-                                {!item.earned && <Text style={styles.lockedText}>Locked</Text>}
-                            </View>
+                            <MotiView
+                                key={item.id}
+                                from={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ delay: 400 + (parseInt(item.id) * 100) }}
+                                style={[styles.achievementCard, !item.earned && { opacity: 0.6 }]}
+                            >
+                                <LinearGradient
+                                    colors={item.earned ? [item.color + '15', item.color + '05'] : ['#F8F9FA', '#F1F5F9']}
+                                    style={styles.achievementGradient}
+                                >
+                                    <View style={[styles.achievementIcon, { backgroundColor: item.earned ? item.color + '20' : '#E2E8F0' }]}>
+                                        <item.icon size={26} color={item.earned ? item.color : '#94A3B8'} fill={item.earned ? item.color + '30' : 'transparent'} />
+                                    </View>
+                                    <Text style={styles.achievementTitle}>{item.title}</Text>
+                                    <View style={styles.earnedBadge}>
+                                        <Text style={[styles.earnedText, { color: item.earned ? item.color : '#94A3B8' }]}>
+                                            {item.earned ? item.subtitle : 'Locked'}
+                                        </Text>
+                                    </View>
+                                </LinearGradient>
+                            </MotiView>
                         ))}
                     </ScrollView>
 
                     <Text style={styles.sectionTitle}>Account Settings</Text>
                     <View style={styles.card}>
-                        <MenuItem icon={User} title="Personal & Emergency Info" subtitle="Edit profile and emergency contact" onPress={() => { setActiveModal('info'); setEditModalVisible(true); }} />
+                        <MenuItem
+                            icon={User}
+                            title="Personal & Emergency Info"
+                            subtitle="Edit profile and emergency contact"
+                            onPress={() => { setActiveModal('info'); setEditModalVisible(true); }}
+                            iconColor="#6366F1"
+                            iconBg="#EEF2FF"
+                        />
                         <View style={styles.divider} />
-                        <MenuItem icon={Bell} title="Notifications" subtitle="Push, email, and emergency alerts" onPress={() => { setActiveModal('notifications'); setEditModalVisible(true); }} />
+                        <MenuItem
+                            icon={Bell}
+                            title="Notifications"
+                            subtitle="Push, email, and emergency alerts"
+                            onPress={() => { setActiveModal('notifications'); setEditModalVisible(true); }}
+                            iconColor="#F59E0B"
+                            iconBg="#FFFBEB"
+                        />
                         <View style={styles.divider} />
-                        <MenuItem icon={Shield} title="Privacy & Security" subtitle="Anonymous reporting and app lock" onPress={() => { setActiveModal('privacy'); setEditModalVisible(true); }} />
+                        <MenuItem
+                            icon={Shield}
+                            title="Privacy & Security"
+                            subtitle="Anonymous reporting and app lock"
+                            onPress={() => { setActiveModal('privacy'); setEditModalVisible(true); }}
+                            iconColor="#10B981"
+                            iconBg="#F0FDF4"
+                        />
                     </View>
 
                     <Text style={styles.sectionTitle}>Support & Community</Text>
                     <View style={styles.card}>
-                        <MenuItem icon={HelpCircle} title="Help Center" onPress={() => router.push('/help')} />
+                        <MenuItem
+                            icon={HelpCircle}
+                            title="Help Center"
+                            onPress={() => router.push('/help')}
+                            iconColor="#8B5CF6"
+                            iconBg="#F5F3FF"
+                        />
                         <View style={styles.divider} />
-                        <MenuItem icon={FileText} title="Terms of Service" onPress={() => router.push('/legal/terms')} />
+                        <MenuItem
+                            icon={FileText}
+                            title="Terms of Service"
+                            onPress={() => router.push('/legal/terms')}
+                            iconColor="#64748B"
+                            iconBg="#F8FAFC"
+                        />
                         <View style={styles.divider} />
-                        <MenuItem icon={Shield} title="Privacy Policy" onPress={() => router.push('/legal/privacy')} />
+                        <MenuItem
+                            icon={Shield}
+                            title="Privacy Policy"
+                            onPress={() => router.push('/legal/privacy')}
+                            iconColor="#64748B"
+                            iconBg="#F8FAFC"
+                        />
                         <View style={styles.divider} />
-                        <MenuItem icon={CircleChevronRight} title="Community Guidelines" onPress={() => router.push('/legal/guidelines')} />
+                        <MenuItem
+                            icon={CircleChevronRight}
+                            title="Community Guidelines"
+                            onPress={() => router.push('/legal/guidelines')}
+                            iconColor="#64748B"
+                            iconBg="#F8FAFC"
+                        />
                     </View>
 
 
-                    <TouchableOpacity style={styles.logoutBtn} onPress={handleSignOut}>
-                        <LogOut size={20} color={COLORS.error} />
-                        <Text style={styles.logoutText}>Sign Out</Text>
+                    <TouchableOpacity style={styles.logoutBtn} onPress={handleSignOut} activeOpacity={0.7}>
+                        <MotiView
+                            from={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                        >
+                            <LogOut size={20} color="#E11D48" />
+                            <Text style={styles.logoutText}>Sign Out</Text>
+                        </MotiView>
                     </TouchableOpacity>
 
                     <Text style={styles.versionText}>Version 1.0.0 (Premium Build)</Text>
                     <View style={{ height: 120 }} />
                 </View>
-            </ScrollView>
+            </ScrollView >
 
             {/* Premium Settings Modal */}
-            <Modal
+            < Modal
                 visible={editModalVisible}
                 animationType="slide"
                 transparent={true}
-                onRequestClose={() => setEditModalVisible(false)}
+                onRequestClose={() => setEditModalVisible(false)
+                }
             >
                 <KeyboardAvoidingView
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -653,74 +731,372 @@ export default function ProfileScreen() {
                         </View>
                     </View>
                 </KeyboardAvoidingView>
-            </Modal>
-        </View>
+            </Modal >
+        </View >
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
     row: { flexDirection: 'row', alignItems: 'center' },
-    headerGradient: { borderBottomLeftRadius: 44, borderBottomRightRadius: 44, paddingBottom: 40, ...SHADOWS.premium },
-    headerContent: { paddingHorizontal: SPACING.lg },
-    profileRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20 },
-    imageContainer: { width: 80, height: 80, borderRadius: 40, position: 'relative' },
-    profileImage: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: COLORS.white },
-    editBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: COLORS.gold, width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: COLORS.white },
-    nameContainer: { marginLeft: 20 },
-    name: { fontSize: 24, fontWeight: '900', color: COLORS.white },
-    rank: { fontSize: 13, color: 'rgba(255,255,255,0.7)', fontWeight: '600', marginTop: 4 },
-    statsOverview: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.15)', marginTop: 40, borderRadius: 24, padding: 24, justifyContent: 'space-around', alignItems: 'center' },
-    statBox: { alignItems: 'center' },
-    scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    statNumber: { fontSize: 20, fontWeight: '800', color: COLORS.white },
-    statSkeleton: { width: 30, height: 24, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 4, marginBottom: 2 },
-    statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '700', marginTop: 4 },
-    statDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.2)' },
-    content: { padding: SPACING.lg, paddingBottom: 40 },
-    sectionTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, marginBottom: 20, marginTop: 12 },
-    achievementScroll: { gap: 12, paddingBottom: 20 },
-    achievementCard: { width: 110, backgroundColor: COLORS.white, padding: 16, borderRadius: 24, alignItems: 'center', ...SHADOWS.soft },
-    achievementIcon: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-    achievementTitle: { fontSize: 12, fontWeight: '700', color: COLORS.black, textAlign: 'center' },
-    lockedText: { fontSize: 10, color: COLORS.textMuted, marginTop: 4, fontWeight: '700' },
-    card: { backgroundColor: COLORS.white, borderRadius: BORDER_RADIUS.xl, paddingVertical: 8, ...SHADOWS.premium, marginBottom: 24 },
-    menuItem: { flexDirection: 'row', alignItems: 'center', padding: 16 },
-    menuIconContainer: { width: 44, height: 44, borderRadius: 14, backgroundColor: COLORS.primary + '10', justifyContent: 'center', alignItems: 'center' },
-    menuTextContainer: { flex: 1, marginLeft: 16 },
-    menuTitle: { fontSize: 17, fontWeight: '800', color: COLORS.black },
-    menuSubtitle: { fontSize: 13, color: COLORS.textSecondary, marginTop: 4, lineHeight: 18 },
-    divider: { height: 1, backgroundColor: COLORS.background, marginLeft: 72 },
-    logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, height: 60, borderRadius: 20, backgroundColor: COLORS.error + '10', marginTop: 10 },
-    logoutText: { fontSize: 16, fontWeight: '800', color: COLORS.error },
-    versionText: { textAlign: 'center', marginTop: 32, fontSize: 12, color: COLORS.textMuted, fontWeight: '600' },
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-    modalCloseOverlay: { ...StyleSheet.absoluteFillObject },
+    headerBlock: {
+        marginBottom: 10,
+    },
+    headerGradient: {
+        borderBottomLeftRadius: 60,
+        borderBottomRightRadius: 60,
+        paddingBottom: 10,
+    },
+    headerContent: {
+        paddingHorizontal: 24,
+        paddingBottom: 5,
+    },
+    profileRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 20,
+    },
+    imageContainer: {
+        width: 86,
+        height: 86,
+        borderRadius: 43,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        padding: 4,
+        ...SHADOWS.medium,
+    },
+    profileImage: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 43,
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    profileImageSkeleton: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 43,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    editBadge: {
+        position: 'absolute',
+        bottom: -2,
+        right: -2,
+        backgroundColor: COLORS.gold,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    nameContainer: {
+        marginLeft: 20,
+        flex: 1,
+    },
+    name: {
+        fontSize: 24,
+        fontWeight: '900',
+        color: COLORS.white,
+        letterSpacing: -0.5,
+    },
+    rankBadge: {
+        backgroundColor: 'rgba(255,255,255,0.12)',
+        alignSelf: 'flex-start',
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 12,
+        marginTop: 6,
+    },
+    rankText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: 'rgba(255,255,255,0.95)',
+    },
+    statsCard: {
+        flexDirection: 'row',
+        backgroundColor: 'rgba(0,0,0,0.18)',
+        marginHorizontal: 24,
+        marginTop: 10,
+        borderRadius: 28,
+        padding: 24,
+        justifyContent: 'space-around',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    statBox: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    statNumber: {
+        fontSize: 22,
+        fontWeight: '900',
+        color: COLORS.white,
+    },
+    statLabel: {
+        fontSize: 11,
+        color: 'rgba(255,255,255,0.6)',
+        fontWeight: '700',
+        marginTop: 4,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    statDivider: {
+        width: 1,
+        height: 30,
+        backgroundColor: 'rgba(255,255,255,0.15)',
+    },
+    scoreRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    content: {
+        paddingHorizontal: 24,
+        paddingBottom: 40,
+    },
+    sectionTitle: {
+        fontSize: 22,
+        fontWeight: '900',
+        color: COLORS.black,
+        marginBottom: 20,
+        marginTop: 10,
+        letterSpacing: -0.5,
+    },
+    achievementScroll: {
+        paddingBottom: 20,
+        gap: 16,
+    },
+    achievementCard: {
+        width: 130,
+        backgroundColor: COLORS.white,
+        borderRadius: 24,
+        overflow: 'hidden',
+        ...SHADOWS.soft,
+        borderWidth: 1,
+        borderColor: '#F1F5F9',
+    },
+    achievementGradient: {
+        padding: 16,
+        alignItems: 'center',
+        width: '100%',
+    },
+    achievementIcon: {
+        width: 50,
+        height: 50,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 10,
+        ...SHADOWS.soft,
+    },
+    achievementTitle: {
+        fontSize: 14,
+        fontWeight: '900',
+        color: COLORS.black,
+        textAlign: 'center',
+        letterSpacing: -0.3,
+    },
+    earnedBadge: {
+        backgroundColor: 'rgba(0,0,0,0.04)',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 10,
+        marginTop: 8,
+    },
+    earnedText: {
+        fontSize: 10,
+        fontWeight: '800',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    card: {
+        backgroundColor: COLORS.white,
+        borderRadius: 24,
+        paddingVertical: 8,
+        ...SHADOWS.soft,
+        marginBottom: 24,
+        borderWidth: 1,
+        borderColor: '#F1F5F9',
+    },
+    menuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+    },
+    menuIconContainer: {
+        width: 48,
+        height: 48,
+        borderRadius: 16,
+        backgroundColor: '#F8F9FA',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    menuTextContainer: {
+        flex: 1,
+        marginLeft: 16,
+    },
+    menuTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: COLORS.black,
+    },
+    menuSubtitle: {
+        fontSize: 13,
+        color: COLORS.textMuted,
+        marginTop: 2,
+    },
+    divider: {
+        height: 1,
+        backgroundColor: '#F1F5F9',
+        marginLeft: 80,
+    },
+    logoutBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: 64,
+        borderRadius: 20,
+        backgroundColor: '#FFF1F2',
+        marginTop: 10,
+        gap: 12,
+    },
+    logoutText: {
+        fontSize: 16,
+        fontWeight: '900',
+        color: '#E11D48',
+    },
+    versionText: {
+        textAlign: 'center',
+        marginTop: 32,
+        fontSize: 12,
+        color: COLORS.textMuted,
+        fontWeight: '600',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        justifyContent: 'flex-end',
+    },
+    modalCloseOverlay: {
+        ...StyleSheet.absoluteFillObject,
+    },
     modalContent: {
         backgroundColor: COLORS.white,
-        borderTopLeftRadius: 36,
-        borderTopRightRadius: 36,
-        width: '100%',
-        ...SHADOWS.premium
+        borderTopLeftRadius: 40,
+        borderTopRightRadius: 40,
+        paddingTop: 12,
     },
-    modalHeader: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8, alignItems: 'center' },
-    modalHandle: { width: 44, height: 5, backgroundColor: COLORS.border, borderRadius: 3, marginBottom: 16 },
-    modalTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, textAlign: 'center' },
-    modalScrollContent: { paddingHorizontal: 24, paddingBottom: 40 },
-    modalBody: { gap: 24 },
-    inputGroup: { gap: 8 },
-    modalLabel: { fontSize: 13, fontWeight: '800', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginLeft: 4 },
-    modalInput: { backgroundColor: '#F8F9FA', borderRadius: 18, padding: 18, fontSize: 16, color: COLORS.black, borderWidth: 1.5, borderColor: '#E9ECEF' },
-    saveBtn: { backgroundColor: COLORS.primary, height: 64, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginTop: 12, ...SHADOWS.premium },
-    saveBtnText: { color: COLORS.white, fontSize: 18, fontWeight: '900' },
-    closeBtn: { paddingVertical: 16, alignItems: 'center' },
-    closeBtnText: { color: COLORS.textMuted, fontWeight: '700', fontSize: 16 },
-    prefRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F9FA', padding: 20, borderRadius: 22, marginBottom: 12 },
-    prefTitle: { fontSize: 16, fontWeight: '800', color: COLORS.black },
-    prefSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 4, lineHeight: 16 },
-    timeoutSelector: { flexDirection: 'row', backgroundColor: '#E9ECEF', borderRadius: 12, padding: 4, width: '100%' },
-    timeoutOption: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
-    timeoutOptionActive: { backgroundColor: COLORS.white, ...SHADOWS.soft },
-    timeoutText: { fontSize: 14, fontWeight: '700', color: COLORS.textMuted },
-    timeoutTextActive: { color: COLORS.primary },
+    modalHeader: {
+        alignItems: 'center',
+        paddingBottom: 20,
+    },
+    modalHandle: {
+        width: 40,
+        height: 4,
+        backgroundColor: '#E2E8F0',
+        borderRadius: 2,
+        marginBottom: 16,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: '900',
+        color: COLORS.black,
+    },
+    modalScrollContent: {
+        paddingHorizontal: 24,
+        paddingBottom: 40,
+    },
+    modalBody: {
+        gap: 20,
+    },
+    inputGroup: {
+        gap: 8,
+    },
+    modalLabel: {
+        fontSize: 12,
+        fontWeight: '800',
+        color: COLORS.textSecondary,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        marginLeft: 4,
+    },
+    modalInput: {
+        backgroundColor: '#F8F9FA',
+        borderRadius: 16,
+        padding: 16,
+        fontSize: 16,
+        color: COLORS.black,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    saveBtn: {
+        backgroundColor: COLORS.primary,
+        height: 64,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginTop: 10,
+        ...SHADOWS.medium,
+    },
+    saveBtnText: {
+        color: COLORS.white,
+        fontSize: 18,
+        fontWeight: '900',
+    },
+    closeBtn: {
+        paddingVertical: 20,
+        alignItems: 'center',
+    },
+    closeBtnText: {
+        color: COLORS.textMuted,
+        fontWeight: '700',
+        fontSize: 16,
+    },
+    prefRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F8F9FA',
+        padding: 20,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    prefTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: COLORS.black,
+    },
+    prefSub: {
+        fontSize: 12,
+        color: COLORS.textMuted,
+        marginTop: 4,
+    },
+    timeoutSelector: {
+        flexDirection: 'row',
+        backgroundColor: '#E2E8F0',
+        borderRadius: 12,
+        padding: 4,
+        marginTop: 8,
+    },
+    timeoutOption: {
+        flex: 1,
+        paddingVertical: 10,
+        alignItems: 'center',
+        borderRadius: 8,
+    },
+    timeoutOptionActive: {
+        backgroundColor: COLORS.white,
+    },
+    timeoutText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: COLORS.textMuted,
+    },
+    timeoutTextActive: {
+        color: COLORS.primary,
+    },
 });

@@ -19,8 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useIncidents } from "@/hooks/useIncidents";
+import { useUserSettings } from "@/hooks/useUserSettings";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
@@ -31,7 +33,6 @@ import {
   Image,
   LayoutGrid,
   LayoutList,
-  Loader2,
   MapPin,
   MessageSquare,
   MoreHorizontal,
@@ -49,7 +50,11 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 // ... inside component ...
 export default function Incidents() {
-  const { incidents, isLoading: loading } = useIncidents();
+  const { settings: userSettings } = useUserSettings();
+  const { incidents, isLoading: loading } = useIncidents(undefined, {
+    refreshInterval: userSettings?.ui_prefs.refreshInterval,
+    limit: userSettings?.ui_prefs.itemsPerPage
+  });
   const [searchParams] = useSearchParams(); // Get URL params
 
   const [viewMode, setViewMode] = useState<"card" | "table">("card");
@@ -256,26 +261,43 @@ export default function Incidents() {
       )}
 
       {/* Incidents List */}
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      ) : filteredIncidents.length === 0 ? (
-        <div className="text-center py-12">
-          <MapPin className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-          <p className="text-muted-foreground">No incidents found</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => setNewIncidentOpen(true)}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Create First Incident
-          </Button>
-        </div>
-      ) : (
-        <ScrollArea className="h-[calc(100vh-380px)]">
+      <ScrollArea className="h-[calc(100vh-380px)]">
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {Array(9).fill(0).map((_, i) => (
+              <div key={i} className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-6 w-20 rounded-full" />
+                </div>
+                <div className="flex gap-2">
+                  <Skeleton className="h-6 w-16 rounded-full" />
+                  <Skeleton className="h-6 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-6 w-full" />
+                <Skeleton className="h-12 w-full" />
+                <div className="flex justify-between pt-2 border-t border-border/30">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredIncidents.length === 0 ? (
+          <div className="text-center py-12">
+            <MapPin className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+            <p className="text-muted-foreground">No incidents found</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-4"
+              onClick={() => setNewIncidentOpen(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Create First Incident
+            </Button>
+          </div>
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredIncidents.map((incident) => (
               <IncidentCard
@@ -286,8 +308,8 @@ export default function Incidents() {
               />
             ))}
           </div>
-        </ScrollArea>
-      )}
+        )}
+      </ScrollArea>
 
       {/* Dialogs */}
       <NewIncidentDialog

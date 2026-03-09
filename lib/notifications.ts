@@ -1,6 +1,5 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
@@ -8,18 +7,27 @@ import { supabase } from './supabase';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const isDevice = Device.isDevice;
 
+let Notifications: any = null;
+if (!isExpoGo) {
+    try {
+        Notifications = require('expo-notifications');
+    } catch (e) { }
+}
+
 // Configure how notifications should be handled when the app is in the foreground
-Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-    }),
-});
+if (Notifications) {
+    Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+            shouldShowBanner: true,
+            shouldShowList: true,
+            shouldPlaySound: true,
+            shouldSetBadge: true,
+        }),
+    });
+}
 
 export async function registerForPushNotificationsAsync() {
-    if (isExpoGo || !isDevice) {
+    if (isExpoGo || !isDevice || !Notifications) {
         console.log('Push notification registration skipped: Running in Expo Go or non-physical device.');
         return null;
     }
@@ -76,6 +84,7 @@ export async function savePushToken(userId: string, token: string) {
 }
 
 export async function sendTestNotification() {
+    if (!Notifications) return;
     await Notifications.scheduleNotificationAsync({
         content: {
             title: "Emergency Alert Test 🚨",

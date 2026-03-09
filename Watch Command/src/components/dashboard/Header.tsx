@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useUserSettings } from "@/hooks/useUserSettings";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -35,11 +36,11 @@ interface HeaderProps {
 }
 
 export function Header({ onMenuClick }: HeaderProps) {
-  const [isMuted, setIsMuted] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const navigate = useNavigate();
   const { profile, signOut } = useAuth();
+  const { settings: userSettings, updateNotificationPrefs } = useUserSettings();
   const { notifications, unreadCount, markAsRead, markAllAsRead, refetch } = useNotifications();
 
   const handleRefresh = async () => {
@@ -121,13 +122,14 @@ export function Header({ onMenuClick }: HeaderProps) {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setIsMuted(!isMuted)}
+          onClick={() => updateNotificationPrefs({ sound_alerts: !userSettings?.notification_prefs.sound_alerts })}
           className="h-9 w-9"
+          disabled={!userSettings}
         >
-          {isMuted ? (
-            <VolumeX className="h-4 w-4" />
-          ) : (
+          {userSettings?.notification_prefs.sound_alerts ? (
             <Volume2 className="h-4 w-4" />
+          ) : (
+            <VolumeX className="h-4 w-4" />
           )}
         </Button>
 

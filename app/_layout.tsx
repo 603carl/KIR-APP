@@ -8,16 +8,18 @@ import 'react-native-reanimated';
 
 import { EmergencyBroadcastOverlay, type BroadcastAlert } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { useColorScheme } from '@/components/useColorScheme';
-import { COLORS } from '@/constants/Theme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { supabase } from '@/lib/supabase';
 import { useAssets } from 'expo-asset';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import * as LocalAuthentication from 'expo-local-authentication';
-import { useRouter, useSegments } from 'expo-router';
+import { useRootNavigationState, useRouter, useSegments } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Linking, Platform, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, AppState, Linking, LogBox, Platform, Text, TouchableOpacity } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+// Ignore specific warnings if necessary
+LogBox.ignoreLogs(['Reading the project root', 'NativeEventEmitter']);
 
 
 export {
@@ -26,11 +28,25 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-    initialRouteName: '(tabs)',
+    // Ensure that reloading on `/modal` keeps a back button present.
+    initialRouteName: 'onboarding',
 };
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+// Global Font Scaling Prevention
+if ((Text as any).defaultProps) {
+    (Text as any).defaultProps.allowFontScaling = false;
+} else {
+    (Text as any).defaultProps = { allowFontScaling: false };
+}
+
+if ((TouchableOpacity as any).defaultProps) {
+    (TouchableOpacity as any).defaultProps.allowFontScaling = false;
+} else {
+    (TouchableOpacity as any).defaultProps = { allowFontScaling: false };
+}
 
 
 export default function RootLayout() {
@@ -48,8 +64,10 @@ export default function RootLayout() {
     const segments = useSegments();
     const router = useRouter();
 
-    const [isLocked, setIsLocked] = useState(false);
     const [isNavigationReady, setIsNavigationReady] = useState(false);
+    const [initialRouteDetermined, setInitialRouteDetermined] = useState(false);
+    const [pendingRedirect, setPendingRedirect] = useState<string | null>(null);
+    const rootNavState = useRootNavigationState();
     const [activeBroadcast, setActiveBroadcast] = useState<BroadcastAlert | null>(null);
     const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
     const userRoleRef = useRef<string | null>(null);
@@ -113,11 +131,11 @@ export default function RootLayout() {
                 const inOnboarding = segments[0] === 'onboarding';
 
                 if (!hasSeenOnboarding && !inOnboarding) {
-                    router.replace('/onboarding');
+                    setPendingRedirect('/onboarding');
                 } else if (hasSeenOnboarding && !session && !inAuthGroup && !inOnboarding) {
-                    router.replace('/auth/login');
+                    setPendingRedirect('/auth/login');
                 } else if (session && (inAuthGroup || inOnboarding)) {
-                    router.replace('/(tabs)');
+                    setPendingRedirect('/(tabs)');
                 }
 
                 // 4. Profile, Biometric Lock & Role Check
@@ -132,15 +150,6 @@ export default function RootLayout() {
 
                             if (profile) {
                                 userRoleRef.current = profile.role || 'reporter';
-
-                                if (profile.privacy_settings?.biometric_lock) {
-                                    setIsLocked(true);
-                                    const result = await LocalAuthentication.authenticateAsync({
-                                        promptMessage: 'Authenticate to Kenya Incident Hub',
-                                        fallbackLabel: 'Use Passcode',
-                                    });
-                                    if (result.success) setIsLocked(false);
-                                }
 
                                 if (profile.privacy_settings?.auto_sign_out_timeout !== undefined) {
                                     autoSignOutTimeout.current = profile.privacy_settings.auto_sign_out_timeout;
@@ -160,6 +169,7 @@ export default function RootLayout() {
             } catch (e) {
                 console.error('Init Error:', e);
             } finally {
+                setInitialRouteDetermined(true);
                 setIsNavigationReady(true);
                 setTimeout(async () => {
                     await SplashScreen.hideAsync().catch(() => { });
@@ -168,7 +178,16 @@ export default function RootLayout() {
         }
 
         initAndCheckNavigation();
+    }, [loaded]); // Removed segments from potential loop dependencies
 
+    // Perform the redirect securely once rotation/layout is mounted
+    useEffect(() => {
+        if (!rootNavState?.key || !initialRouteDetermined || !loaded || !pendingRedirect) return;
+        router.replace(pendingRedirect as any);
+        setPendingRedirect(null);
+    }, [rootNavState?.key, initialRouteDetermined, loaded, pendingRedirect, router]);
+
+    useEffect(() => {
         // ─── Global Broadcast Listener (Real-time from DB) ───────────
         const loadAcknowledgedIds = async () => {
             try {
@@ -258,44 +277,32 @@ export default function RootLayout() {
         };
     }, [loaded]);
 
-    if (!loaded) return null;
-
-    if (isLocked) {
-        return (
-            <View style={{ flex: 1, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator size="large" color="#ffffff" />
-                <TouchableOpacity
-                    onPress={() => setIsNavigationReady(false)}
-                    style={{ marginTop: 20, padding: 10 }}
-                >
-                    <Text style={{ color: '#ffffff', fontWeight: 'bold' }}>Tap to Unlock</Text>
-                </TouchableOpacity>
-            </View>
-        );
-    }
+    if (!loaded || !initialRouteDetermined) return null;
 
     return (
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <Stack screenOptions={{ headerShown: false }}>
-                <Stack.Screen name="onboarding" />
-                <Stack.Screen name="auth/login" />
-                <Stack.Screen name="auth/signup" />
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="incident/[id]" options={{ presentation: 'card' }} />
-                <Stack.Screen name="settings" options={{ presentation: 'card', headerShown: true }} />
-                <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-            </Stack>
-            <EmergencyBroadcastOverlay
-                alert={activeBroadcast}
-                onAcknowledge={async (id) => {
-                    const updatedIds = [...acknowledgedIds, id];
-                    setAcknowledgedIds(updatedIds);
-                    await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
-                    setActiveBroadcast(null);
-                }}
-            />
-        </ThemeProvider>
+        <SafeAreaProvider>
+            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                <Stack screenOptions={{ headerShown: false }}>
+                    <Stack.Screen name="onboarding" />
+                    <Stack.Screen name="auth/login" />
+                    <Stack.Screen name="auth/signup" />
+                    <Stack.Screen name="(tabs)" />
+                    <Stack.Screen name="incident/[id]" options={{ presentation: 'card' }} />
+                    <Stack.Screen name="settings" options={{ presentation: 'card', headerShown: true }} />
+                    <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
+                    <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+                </Stack>
+                <EmergencyBroadcastOverlay
+                    alert={activeBroadcast}
+                    onAcknowledge={async (id) => {
+                        const updatedIds = [...acknowledgedIds, id];
+                        setAcknowledgedIds(updatedIds);
+                        await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
+                        setActiveBroadcast(null);
+                    }}
+                />
+            </ThemeProvider>
+        </SafeAreaProvider>
     );
 }
 

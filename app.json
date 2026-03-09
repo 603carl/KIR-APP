@@ -1,13 +1,12 @@
 {
   "expo": {
-    "name": "Kenya-incident-report",
+    "name": "Kenya Incident Report",
     "slug": "kenya-incident-report",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "kir",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash.png",
       "resizeMode": "contain",
@@ -31,7 +30,6 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.publickenyaapp.kenyaincidentreport",
       "permissions": [
@@ -67,7 +65,7 @@
           "locationAlwaysAndWhenInUsePermission": "Allow Incident Reporter to use your location to show nearby incidents."
         }
       ],
-      "@react-native-google-signin/google-signin/app.plugin.js",
+      "@react-native-google-signin/google-signin",
       "expo-asset",
       "./plugins/withAndroidFullScreen",
       [
@@ -77,7 +75,9 @@
           "channelName": "Emergency Broadcasts",
           "notificationColor": "#FF0000"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

@@ -288,6 +288,7 @@ export default function MapPage() {
                   selectedIncident={selectedIncident}
                   onIncidentSelect={handleIncidentSelect}
                   onFlyToIncident={handleFlyToIncident}
+                  isLoading={isLoading}
                 />
               </TabsContent>
             </Tabs>

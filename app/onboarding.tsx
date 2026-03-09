@@ -44,9 +44,10 @@ export default function OnboardingScreen() {
             if (currentIndex < SLIDES.length - 1) {
                 flatListRef.current?.scrollToIndex({ index: currentIndex + 1, animated: true });
             } else {
-                handleSkip(); // Auto-finish if at end
+                // Pause on the last slide so the user can click Get Started themselves
+                if (timerRef.current) clearInterval(timerRef.current);
             }
-        }, 4000); // 4 seconds per slide
+        }, 5000); // Increased to 5 seconds per slide for better reading time
     };
 
     React.useEffect(() => {
@@ -86,6 +87,8 @@ export default function OnboardingScreen() {
                     horizontal
                     pagingEnabled
                     showsHorizontalScrollIndicator={false}
+                    getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+                    bounces={false}
                     onScroll={(e) => {
                         const index = Math.round(e.nativeEvent.contentOffset.x / width);
                         setCurrentIndex(index);

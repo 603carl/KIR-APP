@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ActivityItem } from "@/types/incident";
 import { formatDistanceToNow } from "date-fns";
@@ -20,6 +21,7 @@ import { SeverityBadge } from "./SeverityBadge";
 interface ActivityFeedProps {
   activities: ActivityItem[];
   maxHeight?: string;
+  isLoading?: boolean;
 }
 
 const activityIcons: Record<ActivityItem['type'], React.ReactNode> = {
@@ -38,7 +40,7 @@ const activityColors: Record<ActivityItem['type'], string> = {
   escalation: 'bg-severity-high-bg text-severity-high'
 };
 
-export function ActivityFeed({ activities, maxHeight = "500px" }: ActivityFeedProps) {
+export function ActivityFeed({ activities, maxHeight = "500px", isLoading = false }: ActivityFeedProps) {
   const [isPaused, setIsPaused] = useState(false);
   const [visibleActivities, setVisibleActivities] = useState(activities.slice(0, 20));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -105,7 +107,19 @@ export function ActivityFeed({ activities, maxHeight = "500px" }: ActivityFeedPr
       {/* Activity List */}
       <ScrollArea className="flex-1" style={{ maxHeight }}>
         <div className="divide-y divide-border/30">
-          {visibleActivities.map((activity, index) => (
+          {isLoading ? (
+            Array(6).fill(0).map((_, i) => (
+              <div key={i} className="px-4 py-3 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Skeleton className="h-8 w-8 rounded-full flex-shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-3 w-full" />
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : visibleActivities.map((activity, index) => (
             <div
               key={activity.id}
               className={cn(

@@ -1,4 +1,5 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ActivityItem } from "@/types/incident";
 import { formatDistanceToNow } from "date-fns";
@@ -14,6 +15,7 @@ import {
 
 interface RecentActionsProps {
   activities?: ActivityItem[];
+  isLoading?: boolean;
 }
 
 const actionIcons: Record<string, React.ReactNode> = {
@@ -36,7 +38,10 @@ const actionColors: Record<string, string> = {
   status_change: 'bg-severity-info-bg text-severity-info'
 };
 
-export function RecentActions({ activities = [] }: RecentActionsProps) {
+export function RecentActions({
+  activities = [],
+  isLoading = false
+}: RecentActionsProps) {
   return (
     <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
       <div className="px-4 py-3 border-b border-border/50">
@@ -46,7 +51,19 @@ export function RecentActions({ activities = [] }: RecentActionsProps) {
 
       <ScrollArea className="h-[300px]">
         <div className="divide-y divide-border/30">
-          {activities.length === 0 ? (
+          {isLoading ? (
+            Array(5).fill(0).map((_, i) => (
+              <div key={i} className="px-4 py-3 space-y-2">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-7 w-7 rounded-full flex-shrink-0" />
+                  <div className="flex-1 space-y-1">
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : activities.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground text-sm">
               No recent actions recorded.
             </div>

@@ -1,9 +1,12 @@
+// @ts-nocheck
+/// <reference types="https://esm.sh/@supabase/supabase-js@2" />
+/// <reference lib="deno.ns" />
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
-Deno.serve(async (req) => {
+Deno.serve(async (req: Request) => {
     try {
         const payload = await req.json();
         console.log('Push Payload Received:', JSON.stringify(payload));

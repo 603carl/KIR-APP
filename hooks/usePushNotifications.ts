@@ -1,65 +1,81 @@
 import { supabase } from '@/lib/supabase';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import type { ForegroundOptionsModel } from 'react-native-full-screen-notification-incoming-call';
-import RNIncomingCall from 'react-native-full-screen-notification-incoming-call';
 
 // ─── Constants ───────────────────────────────────────────────────────
 const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_EMERGENCY_NOTIFICATION';
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+let Notifications: any = null;
+let RNIncomingCall: any = null;
+if (!isExpoGo) {
+    try {
+        Notifications = require('expo-notifications');
+    } catch (e) { }
+
+    try {
+        RNIncomingCall = require('react-native-full-screen-notification-incoming-call').default;
+    } catch (e) { }
+}
 
 // ─── Notification Handler (Foreground) ───────────────────────────────
-Notifications.setNotificationHandler({
-    handleNotification: async (notification) => {
-        const data = notification.request.content.data as any;
+if (Notifications) {
+    Notifications.setNotificationHandler({
+        handleNotification: async (notification: any) => {
+            const data = notification.request.content.data as any;
 
-        // If it's a broadcast, trigger FSI on Android for maximum visibility
-        if (Platform.OS === 'android' && data?.isBroadcast) {
-            triggerFullScreenAlert(data);
-        }
+            // If it's a broadcast, trigger FSI on Android for maximum visibility
+            if (Platform.OS === 'android' && data?.isBroadcast) {
+                triggerFullScreenAlert(data);
+            }
 
-        return {
-            shouldShowAlert: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-        };
-    },
-});
+            return {
+                shouldShowBanner: true,
+                shouldShowList: true,
+                shouldPlaySound: true,
+                shouldSetBadge: true,
+            };
+        },
+    });
+}
 
 // ─── Background Notification Task ────────────────────────────────────
 // This fires when a push arrives while the app is killed or in background.
 // It's the key to "phone takeover" — we trigger the native FSI from here.
-TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
-    if (error) {
-        console.error('[BG Task] Error:', error);
-        return;
-    }
+if (!isExpoGo && Notifications) {
+    TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
+        if (error) {
+            console.error('[BG Task] Error:', error);
+            return;
+        }
 
-    const notificationData = (data as any)?.notification?.data;
-    if (!notificationData) return;
+        const notificationData = (data as any)?.notification?.data;
+        if (!notificationData) return;
 
-    console.log('[BG Task] Background notification received:', JSON.stringify(notificationData));
+        console.log('[BG Task] Background notification received:', JSON.stringify(notificationData));
 
-    // Only trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
-    if (notificationData.isBroadcast && Platform.OS === 'android') {
-        triggerFullScreenAlert(notificationData);
-    }
-});
+        // Only trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
+        if (notificationData.isBroadcast && Platform.OS === 'android') {
+            triggerFullScreenAlert(notificationData);
+        }
+    });
 
-// Register the background task
-Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK).catch((err) => {
-    console.log('[BG Task] Registration (may already be registered):', err?.message);
-});
+    // Register the background task
+    Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK).catch((err: any) => {
+        console.log('[BG Task] Registration (may already be registered):', err?.message);
+    });
+}
 
 // ─── Full-Screen Alert Trigger (Android Native) ──────────────────────
 // This uses the native Android FSI library to wake the screen,
 // play alarm, and show a full-screen UI even when locked
 function triggerFullScreenAlert(data: any) {
+    if (isExpoGo) return; // Native FSI not available in Expo Go
     try {
         const title = data.title || '📢 Emergency Broadcast';
         const message = data.message || 'An emergency broadcast has been issued.';
@@ -80,12 +96,14 @@ function triggerFullScreenAlert(data: any) {
             payload: JSON.stringify(data),
         };
 
-        RNIncomingCall.displayNotification(
-            uuid,       // unique call ID
-            null,       // avatar URI (null = use default icon)
-            30000,      // timeout in ms (30s — then it drops to heads-up)
-            foregroundOptions,
-        );
+        if (RNIncomingCall) {
+            RNIncomingCall.displayNotification(
+                uuid,       // unique call ID
+                null,       // avatar URI (null = use default icon)
+                30000,      // timeout in ms (30s — then it drops to heads-up)
+                foregroundOptions,
+            );
+        }
     } catch (err) {
         console.error('[FSI] Failed to trigger full-screen alert:', err);
     }
@@ -103,10 +121,15 @@ export interface NotificationBroadcastData {
 
 // ─── Hook ────────────────────────────────────────────────────────────
 export function usePushNotifications(onBroadcastReceived?: (data: NotificationBroadcastData) => void) {
-    const notificationListener = useRef<Notifications.Subscription | null>(null);
-    const responseListener = useRef<Notifications.Subscription | null>(null);
+    const notificationListener = useRef<any | null>(null);
+    const responseListener = useRef<any | null>(null);
 
     async function registerForPushNotificationsAsync() {
+        if (isExpoGo) {
+            console.log('Skipping push token registration in Expo Go');
+            return null;
+        }
+
         let token;
 
         if (Platform.OS === 'android') {
@@ -198,7 +221,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         });
 
         // ─── Notification Data Extractor ─────────────────────────────
-        const handleNotificationData = (notification: Notifications.Notification) => {
+        const handleNotificationData = (notification: any) => {
             const data = notification.request.content.data as NotificationBroadcastData;
             if (data && (data.broadcastId || data.severity || data.isBroadcast)) {
                 console.log('[Push] Emergency signal detected in notification:', JSON.stringify(data));
@@ -211,21 +234,23 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         };
 
         // ─── Foreground Notification Listener ────────────────────────
-        notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-            console.log('[Push] Notification Received (foreground):', notification.request.content.title);
-            handleNotificationData(notification);
-        });
+        if (Notifications) {
+            notificationListener.current = Notifications.addNotificationReceivedListener((notification: any) => {
+                console.log('[Push] Notification Received (foreground):', notification.request.content.title);
+                handleNotificationData(notification);
+            });
 
-        // ─── Notification Tap Listener ───────────────────────────────
-        // When user taps a notification — this is key for background/killed scenarios
-        responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-            console.log('[Push] Notification Tapped:', response.notification.request.content.title);
-            handleNotificationData(response.notification);
-        });
+            // ─── Notification Tap Listener ───────────────────────────────
+            // When user taps a notification — this is key for background/killed scenarios
+            responseListener.current = Notifications.addNotificationResponseReceivedListener((response: any) => {
+                console.log('[Push] Notification Tapped:', response.notification.request.content.title);
+                handleNotificationData(response.notification);
+            });
+        }
 
         // ─── FSI Library Event Listeners (Android) ───────────────────
         // When user answers/dismisses the native FSI notification
-        if (Platform.OS === 'android') {
+        if (Platform.OS === 'android' && !isExpoGo && RNIncomingCall) {
             RNIncomingCall.addEventListener('answer', (payload: any) => {
                 console.log('[FSI] User answered emergency alert:', payload?.callUUID);
                 // Dismiss the native FSI — the in-app overlay will take over
@@ -248,7 +273,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             if (responseListener.current) {
                 responseListener.current.remove();
             }
-            if (Platform.OS === 'android') {
+            if (Platform.OS === 'android' && !isExpoGo && RNIncomingCall) {
                 RNIncomingCall.removeEventListener('answer');
                 RNIncomingCall.removeEventListener('endCall');
             }

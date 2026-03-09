@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -14,11 +15,11 @@ import { useState } from "react";
 
 interface CountyTableProps {
   data: CountyStats[];
+  isLoading?: boolean;
 }
-
 type SortKey = keyof CountyStats;
 
-export function CountyTable({ data }: CountyTableProps) {
+export function CountyTable({ data, isLoading = false }: CountyTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('totalReports');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
@@ -92,7 +93,19 @@ export function CountyTable({ data }: CountyTableProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedData.map((county, index) => (
+            {isLoading ? (
+              Array(10).fill(0).map((_, i) => (
+                <TableRow key={i} className="border-border/30">
+                  <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                </TableRow>
+              ))
+            ) : sortedData.map((county, index) => (
               <TableRow
                 key={county.county}
                 className="cursor-pointer hover:bg-accent/50"

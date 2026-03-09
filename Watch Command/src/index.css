@@ -383,24 +383,32 @@
   @apply p-2 lg:p-3;
 }
 
+.compact-mode .card {
+  @apply rounded-md !important;
+}
+
 .compact-mode .card-header {
-  @apply py-3 px-4;
+  @apply py-1.5 px-3 space-y-0.5 !important;
 }
 
 .compact-mode .card-content {
-  @apply py-3 px-4;
+  @apply p-3 pt-0 !important;
 }
 
 .compact-mode h1 {
-  @apply text-xl;
+  @apply text-lg !important;
 }
 
-.compact-mode .space-y-4 > :not([hidden]) ~ :not([hidden]) {
-  @apply mt-2;
+.compact-mode .card-title {
+  @apply text-base font-semibold leading-tight !important;
+}
+
+.compact-mode .space-y-4> :not([hidden])~ :not([hidden]) {
+  @apply mt-2 !important;
 }
 
 .compact-mode .gap-4 {
-  @apply gap-2;
+  @apply gap-2 !important;
 }
 
 .compact-mode .py-24 {

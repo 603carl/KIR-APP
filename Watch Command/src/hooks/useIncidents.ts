@@ -55,66 +55,8 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             return data;
         },
         refetchInterval: options?.refreshInterval ? options.refreshInterval * 1000 : false,
+        placeholderData: (previousData) => previousData,
     });
-
-    const reporterCount = new Set(incidents.map(i => i.reporter.id)).size;
-    const prevReporterCount = 0; // Simplified for now as we don't have historical active user tracking easily
-
-    const { data: rawTimeline = [] } = useQuery({
-        queryKey: ['dashboard_timeline'],
-        queryFn: async () => {
-            const { data, error } = await supabase
-                .from('incident_timeline')
-                .select('*, incidents(title, severity, category)')
-                .order('created_at', { ascending: false })
-                .limit(100);
-
-            if (error) throw error;
-            return data;
-        },
-    });
-
-    // Realtime subscription for instant updates
-    useEffect(() => {
-        const channel = supabase
-            .channel('dashboard_incidents_sync')
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'incidents'
-            }, () => {
-                queryClient.invalidateQueries({ queryKey: ['incidents'] });
-            })
-            .subscribe();
-
-        const timelineChannel = supabase
-            .channel('dashboard_timeline_sync')
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'incident_timeline'
-            }, () => {
-                queryClient.invalidateQueries({ queryKey: ['dashboard_timeline'] });
-            })
-            .subscribe();
-
-        const profilesChannel = supabase
-            .channel('profiles_sync')
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'profiles'
-            }, () => {
-                queryClient.invalidateQueries({ queryKey: ['reporter_count'] });
-            })
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-            supabase.removeChannel(timelineChannel);
-            supabase.removeChannel(profilesChannel);
-        };
-    }, [queryClient]);
 
     const mapCategory = (cat: string): IncidentCategory => {
         const c = cat?.toLowerCase() || '';
@@ -164,7 +106,66 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
         };
     };
 
-    let incidents = rawIncidents.map(mapRowToIncident);
+    const { data: rawTimeline = [] } = useQuery({
+        queryKey: ['dashboard_timeline'],
+        queryFn: async () => {
+            const { data, error } = await supabase
+                .from('incident_timeline')
+                .select('*, incidents(title, severity, category)')
+                .order('created_at', { ascending: false })
+                .limit(100);
+
+            if (error) throw error;
+            return data;
+        },
+        placeholderData: (previousData) => previousData,
+    });
+
+    // Realtime subscription for instant updates
+    useEffect(() => {
+        const channel = supabase
+            .channel('dashboard_incidents_sync')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'incidents'
+            }, () => {
+                queryClient.invalidateQueries({ queryKey: ['incidents'] });
+            })
+            .subscribe();
+
+        const timelineChannel = supabase
+            .channel('dashboard_timeline_sync')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'incident_timeline'
+            }, () => {
+                queryClient.invalidateQueries({ queryKey: ['dashboard_timeline'] });
+            })
+            .subscribe();
+
+        const profilesChannel = supabase
+            .channel('profiles_sync')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'profiles'
+            }, () => {
+                queryClient.invalidateQueries({ queryKey: ['reporter_count'] });
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+            supabase.removeChannel(timelineChannel);
+            supabase.removeChannel(profilesChannel);
+        };
+    }, [queryClient]);
+
+    const incidents = rawIncidents.map(mapRowToIncident);
+    const reporterCount = new Set(incidents.map(i => i.reporter.id)).size;
+    const prevReporterCount = 0; // Simplified for now as we don't have historical active user tracking easily
 
     // Generate Monthly Trends (Last 6 months)
     const generateMonthlyTrends = () => {
@@ -276,7 +277,8 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             }
             return data as unknown as { name: string }[];
         },
-        staleTime: Infinity
+        staleTime: Infinity,
+        placeholderData: (prev) => prev
     });
 
     const countyStats = allCounties?.length > 0 ? allCounties.map(c => {
@@ -487,6 +489,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             if (error) throw error;
             return count || 0;
         },
+        placeholderData: (prev) => prev
     });
 
     const { data: sosActiveCount = 0 } = useQuery({
@@ -499,6 +502,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             if (error) throw error;
             return count || 0;
         },
+        placeholderData: (prev) => prev
     });
 
     useEffect(() => {

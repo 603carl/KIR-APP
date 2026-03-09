@@ -92,6 +92,11 @@ export function useNotifications() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
+            // Request notification permissions if enabled in settings
+            if (userSettings?.notification_prefs.push_enabled && Notification.permission === "default") {
+                await Notification.requestPermission();
+            }
+
             await fetchNotifications();
 
             // Subscribe to new notifications for THIS user only
@@ -113,6 +118,16 @@ export function useNotifications() {
                         // Play sound if enabled
                         if (userSettings?.notification_prefs.sound_alerts !== false && audioRef.current) {
                             audioRef.current.play().catch(() => { });
+                        }
+
+                        // Show browser notification if enabled
+                        if (userSettings?.notification_prefs.push_enabled &&
+                            Notification.permission === "granted" &&
+                            document.visibilityState !== "visible") {
+                            new Notification(newNotification.title, {
+                                body: newNotification.body,
+                                icon: "/favicon.ico"
+                            });
                         }
                     }
                 )

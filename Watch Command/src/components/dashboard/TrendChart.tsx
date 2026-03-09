@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton";
 import { useIncidents } from "@/hooks/useIncidents";
 import {
   Area,
@@ -61,7 +62,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-export function TrendChart() {
+export function TrendChart({ isLoading = false }: { isLoading?: boolean }) {
   const { incidents } = useIncidents();
   const data = generateStatTrend(incidents);
 
@@ -72,85 +73,92 @@ export function TrendChart() {
           <h3 className="font-semibold">Incident Trends</h3>
           <p className="text-xs text-muted-foreground">Last 24 hours</p>
         </div>
-        <div className="flex items-center gap-4 text-xs">
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-primary" />
-            New Incidents
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-severity-low" />
-            Resolved
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-severity-critical" />
-            Critical
-          </span>
-        </div>
+        {!isLoading && (
+          <div className="flex items-center gap-4 text-xs">
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-primary" />
+              New Incidents
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-severity-low" />
+              Resolved
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-severity-critical" />
+              Critical
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="h-[250px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id="colorIncidents" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="colorResolved" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="colorCritical" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(0, 84%, 60%)" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(0, 84%, 60%)" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-            <XAxis
-              dataKey="time"
-              stroke="hsl(var(--muted-foreground))"
-              fontSize={10}
-              tickLine={false}
-              axisLine={false}
-              interval="preserveStartEnd"
-            />
-            <YAxis
-              stroke="hsl(var(--muted-foreground))"
-              fontSize={10}
-              tickLine={false}
-              axisLine={false}
-              width={30}
-            />
-            <Tooltip content={<CustomTooltip />} />
-            <Area
-              type="monotone"
-              dataKey="incidents"
-              name="New Incidents"
-              stroke="hsl(217, 91%, 60%)"
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#colorIncidents)"
-            />
-            <Area
-              type="monotone"
-              dataKey="resolved"
-              name="Resolved"
-              stroke="hsl(142, 71%, 45%)"
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#colorResolved)"
-            />
-            <Area
-              type="monotone"
-              dataKey="critical"
-              name="Critical"
-              stroke="hsl(0, 84%, 60%)"
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#colorCritical)"
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        {isLoading ? (
+          <Skeleton className="w-full h-full rounded-lg" />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              {/* ... (existing AreaChart content) */}
+              <defs>
+                <linearGradient id="colorIncidents" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="colorResolved" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="colorCritical" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="hsl(0, 84%, 60%)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="hsl(0, 84%, 60%)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+              <XAxis
+                dataKey="time"
+                stroke="hsl(var(--muted-foreground))"
+                fontSize={10}
+                tickLine={false}
+                axisLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                stroke="hsl(var(--muted-foreground))"
+                fontSize={10}
+                tickLine={false}
+                axisLine={false}
+                width={30}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Area
+                type="monotone"
+                dataKey="incidents"
+                name="New Incidents"
+                stroke="hsl(217, 91%, 60%)"
+                strokeWidth={2}
+                fillOpacity={1}
+                fill="url(#colorIncidents)"
+              />
+              <Area
+                type="monotone"
+                dataKey="resolved"
+                name="Resolved"
+                stroke="hsl(142, 71%, 45%)"
+                strokeWidth={2}
+                fillOpacity={1}
+                fill="url(#colorResolved)"
+              />
+              <Area
+                type="monotone"
+                dataKey="critical"
+                name="Critical"
+                stroke="hsl(0, 84%, 60%)"
+                strokeWidth={2}
+                fillOpacity={1}
+                fill="url(#colorCritical)"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

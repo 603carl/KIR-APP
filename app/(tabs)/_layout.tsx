@@ -1,27 +1,11 @@
-import { BORDER_RADIUS, COLORS, SHADOWS } from '@/constants/Theme';
+import { COLORS, SHADOWS } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
-import * as Haptics from 'expo-haptics';
 import { Tabs } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { Bell, FileText, Home, Plus, User } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-const CustomTabBarButton = ({ children, onPress }: any) => (
-  <TouchableOpacity
-    style={styles.addButtonContainer}
-    onPress={() => {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      onPress();
-    }}
-    activeOpacity={0.8}
-  >
-    <View style={styles.addButton}>
-      <Plus color={COLORS.white} size={32} strokeWidth={2.5} />
-    </View>
-  </TouchableOpacity>
-);
 
 // Custom Bell Icon with Badge
 const BellWithBadge = ({ color, unreadCount }: { color: string; unreadCount: number }) => (
@@ -116,33 +100,31 @@ export default function TabLayout() {
         tabBarShowLabel: true,
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textMuted,
-        tabBarLabelStyle: styles.tabBarLabel,
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: Math.max(insets.bottom, 12) + 2,
-          left: 16,
-          right: 16,
-          height: 64,
-          borderRadius: BORDER_RADIUS.xxl,
-          backgroundColor: COLORS.white,
-          borderTopWidth: 0,
-          ...SHADOWS.premium,
-          paddingBottom: 0,
-          paddingTop: 0,
-          elevation: 10,
+        tabBarLabelStyle: {
+          fontSize: 10,
+          fontWeight: '600',
+          marginTop: -4,
         },
-        tabBarBackground: () => (
-          <View
-            style={{
-              position: 'absolute',
-              bottom: -(Math.max(insets.bottom, 12) + 20),
-              left: -20,
-              right: -20,
-              height: Math.max(insets.bottom, 12) + 100,
-              backgroundColor: COLORS.white,
-            }}
-          />
-        ),
+        tabBarItemStyle: {
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: 60,
+        },
+        tabBarStyle: {
+          height: 60 + insets.bottom,
+          backgroundColor: COLORS.white,
+          borderTopWidth: 1,
+          borderTopColor: COLORS.border,
+          paddingBottom: insets.bottom > 0 ? insets.bottom - 4 : 4,
+          paddingTop: 4,
+          elevation: 8,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.1,
+          shadowRadius: 4,
+          flexDirection: 'row',
+        },
       }}>
       <Tabs.Screen
         name="index"
@@ -162,7 +144,13 @@ export default function TabLayout() {
         name="report"
         options={{
           title: '',
-          tabBarButton: (props) => <CustomTabBarButton {...props} />,
+          tabBarIcon: () => (
+            <View style={styles.addButtonContainer}>
+              <View style={styles.addButton}>
+                <Plus color={COLORS.white} size={32} strokeWidth={2.5} />
+              </View>
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
@@ -176,7 +164,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => <User color={color} size={24} />,
+          tabBarIcon: ({ color }) => <User color={color} size={22} />,
         }}
       />
     </Tabs>
@@ -185,19 +173,20 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   addButtonContainer: {
-    top: -30,
+    top: -15,
     justifyContent: 'center',
     alignItems: 'center',
+    width: 52,
   },
   addButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    ...SHADOWS.premium,
-    borderWidth: 4,
+    ...SHADOWS.medium,
+    borderWidth: 2,
     borderColor: COLORS.surface,
   },
   tabBarLabel: {

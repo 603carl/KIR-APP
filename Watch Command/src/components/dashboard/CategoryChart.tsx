@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { CategoryBreakdown } from "@/types/incident";
 import { TrendingDown, TrendingUp } from "lucide-react";
@@ -6,6 +7,7 @@ import { CategoryIcon, getCategoryLabel } from "./CategoryIcon";
 
 interface CategoryChartProps {
   data: CategoryBreakdown[];
+  isLoading?: boolean;
 }
 
 const COLORS = [
@@ -19,7 +21,7 @@ const COLORS = [
   'hsl(215, 20%, 55%)',  // other
 ];
 
-export function CategoryChart({ data }: CategoryChartProps) {
+export function CategoryChart({ data, isLoading = false }: CategoryChartProps) {
   const chartData = data.map(item => ({
     name: getCategoryLabel(item.category),
     value: item.count,
@@ -50,60 +52,73 @@ export function CategoryChart({ data }: CategoryChartProps) {
       <div className="flex items-center gap-4">
         {/* Pie Chart */}
         <div className="w-[180px] h-[180px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                innerRadius={50}
-                outerRadius={80}
-                paddingAngle={2}
-                dataKey="value"
-              >
-                {chartData.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={COLORS[index % COLORS.length]}
-                    className="hover:opacity-80 transition-opacity cursor-pointer"
-                  />
-                ))}
-              </Pie>
-              <Tooltip content={<CustomTooltip />} />
-            </PieChart>
-          </ResponsiveContainer>
+          {isLoading ? (
+            <Skeleton className="w-full h-full rounded-full" />
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={80}
+                  paddingAngle={2}
+                  dataKey="value"
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={COLORS[index % COLORS.length]}
+                      className="hover:opacity-80 transition-opacity cursor-pointer"
+                    />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Legend */}
         <div className="flex-1 space-y-2">
-          {data.slice(0, 6).map((item, index) => (
-            <div
-              key={item.category}
-              className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-accent/50 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                <div
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: COLORS[index] }}
-                />
-                <CategoryIcon category={item.category} size="sm" />
-                <span className="text-sm">{getCategoryLabel(item.category)}</span>
+          {isLoading ? (
+            Array(6).fill(0).map((_, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Skeleton className="h-4 w-4 rounded-full" />
+                <Skeleton className="h-4 flex-1" />
               </div>
-              <span className="font-mono text-sm">{item.percentage}%</span>
-              {item.trend !== 0 && (
-                <span className={cn(
-                  "flex items-center text-xs",
-                  item.trend > 0 ? "text-severity-low" : "text-severity-critical"
-                )}>
-                  {item.trend > 0 ? (
-                    <TrendingUp className="h-3 w-3" />
-                  ) : (
-                    <TrendingDown className="h-3 w-3" />
-                  )}
-                </span>
-              )}
-            </div>
-          ))}
+            ))
+          ) : (
+            data.slice(0, 6).map((item, index) => (
+              <div
+                key={item.category}
+                className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-accent/50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: COLORS[index] }}
+                  />
+                  <CategoryIcon category={item.category} size="sm" />
+                  <span className="text-sm">{getCategoryLabel(item.category)}</span>
+                </div>
+                <span className="font-mono text-sm">{item.percentage}%</span>
+                {item.trend !== 0 && (
+                  <span className={cn(
+                    "flex items-center text-xs",
+                    item.trend > 0 ? "text-severity-low" : "text-severity-critical"
+                  )}>
+                    {item.trend > 0 ? (
+                      <TrendingUp className="h-3 w-3" />
+                    ) : (
+                      <TrendingDown className="h-3 w-3" />
+                    )}
+                  </span>
+                )}
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

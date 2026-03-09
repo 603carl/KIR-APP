@@ -16,8 +16,7 @@ import {
   CheckCircle,
   Clock,
   FileText,
-  Gauge,
-  Loader2
+  Gauge
 } from "lucide-react";
 
 import { FilterState } from "@/components/dialogs/FilterSheet";
@@ -33,16 +32,8 @@ export default function Index() {
   });
   const health = useSystemHealth();
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   // Filter active critical/high incidents for the panel
-  const criticalIncidents = incidents.filter(i =>
+  const criticalIncidents = isLoading ? [] : incidents.filter(i =>
     (i.severity === 'critical' || i.severity === 'high') &&
     !['Resolved', 'Closed', 'Rejected', 'resolved', 'closed', 'rejected'].includes(i.status)
   ).slice(0, 10);
@@ -61,6 +52,7 @@ export default function Index() {
           icon={<FileText className="h-5 w-5" />}
           variant="info"
           sparklineData={stats.sparklines.total}
+          isLoading={isLoading}
         />
         <StatsCard
           title="Active Reports"
@@ -69,6 +61,7 @@ export default function Index() {
           icon={<Activity className="h-5 w-5" />}
           variant="warning"
           sparklineData={stats.sparklines.active}
+          isLoading={isLoading}
         />
         <StatsCard
           title="Resolved Today"
@@ -77,6 +70,7 @@ export default function Index() {
           icon={<CheckCircle className="h-5 w-5" />}
           variant="success"
           sparklineData={stats.sparklines.resolved}
+          isLoading={isLoading}
         />
         <StatsCard
           title="Critical Alerts"
@@ -85,6 +79,7 @@ export default function Index() {
           icon={<AlertTriangle className="h-5 w-5" />}
           variant="critical"
           sparklineData={stats.sparklines.critical}
+          isLoading={isLoading}
         />
         <StatsCard
           title="Avg Response"
@@ -93,6 +88,7 @@ export default function Index() {
           icon={<Clock className="h-5 w-5" />}
           variant="default"
           sparklineData={stats.sparklines.response}
+          isLoading={isLoading}
         />
         <StatsCard
           title="Resolution Rate"
@@ -102,6 +98,7 @@ export default function Index() {
           icon={<Gauge className="h-5 w-5" />}
           variant="success"
           sparklineData={stats.sparklines.resolutionRate}
+          isLoading={isLoading}
         />
       </div>
 
@@ -110,13 +107,13 @@ export default function Index() {
         {/* Left Column - 2/3 width */}
         <div className="lg:col-span-2 space-y-6">
           {/* Trend Chart */}
-          <TrendChart />
+          <TrendChart isLoading={isLoading} />
 
           {/* Critical Incidents */}
-          <CriticalIncidentsPanel incidents={criticalIncidents} />
+          <CriticalIncidentsPanel incidents={criticalIncidents} isLoading={isLoading} />
 
           {/* County Performance Table */}
-          <CountyTable data={countyStats.slice(0, 15)} />
+          <CountyTable data={countyStats.slice(0, 15)} isLoading={isLoading} />
         </div>
 
         {/* Right Column - 1/3 width */}
@@ -125,16 +122,16 @@ export default function Index() {
           <SystemHealthPanel health={health} />
 
           {/* Category Breakdown */}
-          <CategoryChart data={categoryBreakdown} />
+          <CategoryChart data={categoryBreakdown} isLoading={isLoading} />
 
           {/* Quick Actions */}
           <QuickActions />
 
           {/* Activity Feed */}
-          <ActivityFeed activities={activities} maxHeight="400px" />
+          <ActivityFeed activities={activities} maxHeight="400px" isLoading={isLoading} />
 
           {/* Recent Admin Actions */}
-          <RecentActions activities={activities} />
+          <RecentActions activities={activities} isLoading={isLoading} />
         </div>
       </div>
     </DashboardLayout>

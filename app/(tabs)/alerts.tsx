@@ -1,5 +1,6 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
@@ -23,6 +24,8 @@ import {
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
@@ -395,10 +398,15 @@ export default function AlertsScreen() {
     const unreadCount = notifications.filter(n => !n.is_read).length;
 
     useEffect(() => {
-        if (!loading) {
-            import('expo-notifications').then(Notifications => {
-                Notifications.setBadgeCountAsync(unreadCount).catch(() => { });
-            });
+        if (!loading && !isExpoGo) {
+            try {
+                const Notifications = require('expo-notifications');
+                if (Notifications.setBadgeCountAsync) {
+                    Notifications.setBadgeCountAsync(unreadCount).catch(() => { });
+                }
+            } catch (e) {
+                // Ignore expo-notifications error in Expo Go
+            }
         }
     }, [unreadCount, loading]);
 

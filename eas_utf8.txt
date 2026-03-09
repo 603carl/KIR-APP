@@ -1,0 +1,42 @@
+﻿node.exe : - Fetching the 
+buildΓÇª\ Fetching the 
+buildΓÇª| Fetching the 
+buildΓÇª/ Fetching the 
+buildΓÇª- Fetching the 
+buildΓÇª\ Fetching the 
+buildΓÇª| Fetching the 
+buildΓÇª/ Fetching the 
+buildΓÇª- Fetching the 
+buildΓÇª\ Fetching the 
+buildΓÇª| Fetching the 
+buildΓÇª/ Fetching the 
+buildΓÇª- Fetching the 
+buildΓÇª\ Fetching the 
+buildΓÇª| Fetching the 
+buildΓÇª/ Fetching the 
+buildΓÇª- Fetching the 
+buildΓÇª\ Fetching the 
+buildΓÇªΓ£û Something went 
+wrong and we couldn't fetch 
+the build with id d9528f-68a3-
+433d-b508-d8b462a714de
+At C:\Users\Admin\AppData\Roam
+ing\npm\eas.ps1:24 char:5
++     & "node$exe"  "$basedir/
+node_modules/eas-cli/bin/run" 
+$args
++     ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo          : 
+    NotSpecified: (- Fetchin  
+  g the ...08-d8b462a714de:   
+ String) [], RemoteExcepti    
+on
+    + FullyQualifiedErrorId : 
+    NativeCommandError
+ 
+Invalid UUID buildId
+Request ID: c798561f-9759-45fd-9d17-031de7bb6225
+    Error: GraphQL request 
+failed.

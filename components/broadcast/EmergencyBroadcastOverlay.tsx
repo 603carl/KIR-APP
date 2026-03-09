@@ -1,10 +1,11 @@
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { Ionicons } from '@expo/vector-icons';
-import * as expoAudio from 'expo-av';
+import { Asset } from 'expo-asset';
+import { AudioModule, AudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MotiView } from 'moti';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     Dimensions,
     Modal,
@@ -34,9 +35,30 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
     alert,
     onAcknowledge,
 }) => {
+    // Custom wrapper to bypass the Expo SDK 55 expo-audio native arguments bug
+    const safeCreateAudioPlayer = (source: any) => {
+        // Expose require() module IDs to native ExoPlayer URIs manually
+        let resolvedSource = source;
+        if (typeof source === 'number') {
+            const asset = Asset.fromModule(source);
+            resolvedSource = { uri: asset.localUri ?? asset.uri };
+        } else if (typeof source === 'string') {
+            resolvedSource = { uri: source };
+        }
+
+        try {
+            // Newer native binary expects 4 arguments
+            return new AudioModule.AudioPlayer(resolvedSource, 500, false, 0);
+        } catch (e) {
+            // Older native binary (e.g. current Expo Go or EAS build) expects 3 arguments
+            // @ts-ignore
+            return new AudioModule.AudioPlayer(resolvedSource, 500, false);
+        }
+    };
+
     const [isVisible, setIsVisible] = useState(false);
-    const [sound, setSound] = useState<expoAudio.Audio.Sound | null>(null);
-    const vibrationInterval = React.useRef<ReturnType<typeof setInterval> | null>(null);
+    const playerRef = useRef<AudioPlayer | null>(null);
+    const vibrationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         if (alert) {
@@ -64,63 +86,26 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
 
     async function playSound() {
         try {
-            await expoAudio.Audio.setAudioModeAsync({
-                playsInSilentModeIOS: true,
-                shouldDuckAndroid: true,
-                staysActiveInBackground: true,
-                interruptionModeIOS: expoAudio.InterruptionModeIOS.DoNotMix,
-                interruptionModeAndroid: expoAudio.InterruptionModeAndroid.DoNotMix,
-                playThroughEarpieceAndroid: false
+            await setAudioModeAsync({
+                playsInSilentMode: true,
+                shouldPlayInBackground: true,
+                interruptionMode: 'doNotMix',
+                shouldRouteThroughEarpiece: false,
             });
 
-            // Tiered loading strategy: Local Asset (Preloaded) -> Reliable GitHub -> Backups
-            const remoteLinks = [
-                'https://github.com/rafaelreis-hotmart/Emergency-Alert-System-EAS-Sounds/raw/master/EAS%20Attention%20Signal.mp3',
-                'https://raw.githubusercontent.com/zanderev/emergency-alert-system/master/assets/eas.mp3',
-                'https://archive.org/download/EmergencyAlertSystemAttentionSignal/EmergencyAlertSystemAttentionSignal.mp3'
-            ];
-
-            let loaded = false;
-
-            // 1. Try Local Asset First (This is now preloaded in _layout.tsx)
+            // Target the offline, local asset requested by the user
             try {
-                console.log('Attempting to load PRELOADED local EAS asset...');
-                const localAsset = require('../../assets/sounds/emergency_alert.mp3');
-                const { sound: localSound } = await expoAudio.Audio.Sound.createAsync(
-                    localAsset,
-                    { shouldPlay: true, isLooping: true, volume: 1.0 }
-                );
-                setSound(localSound);
-                await localSound.playAsync();
+                console.log('Attempting to load PRELOADED local EAS asset (eas-alert-sound-fx.mp3)...');
+                const localAsset = require('../../assets/sounds/eas-alert-sound-fx.mp3');
+                const player = safeCreateAudioPlayer(localAsset);
+                player.loop = true;
+                player.volume = 1.0;
+                player.play();
+                playerRef.current = player;
                 console.log('SUCCESS: Preloaded local EAS sound is playing.');
-                loaded = true;
             } catch (error) {
                 const localError = error as Error;
                 console.log('Local EAS asset failed after preloading:', localError.message);
-            }
-
-            // 2. Fallback to Remote Links
-            if (!loaded) {
-                for (const link of remoteLinks) {
-                    try {
-                        console.log(`Attempting remote EAS fallback: ${link}`);
-                        const { sound: remoteSound } = await expoAudio.Audio.Sound.createAsync(
-                            { uri: link },
-                            { shouldPlay: true, isLooping: true, volume: 1.0 }
-                        );
-                        setSound(remoteSound);
-                        await remoteSound.playAsync();
-                        console.log(`SUCCESS: Remote EAS sound playing from: ${link}`);
-                        loaded = true;
-                        break;
-                    } catch (error) {
-                        const remoteError = error as Error;
-                        console.log(`Remote source failed (${link}):`, remoteError.message);
-                    }
-                }
-            }
-
-            if (!loaded) {
                 console.error('CRITICAL ERROR: All EAS audio sources failed to load.');
             }
         } catch (globalError) {
@@ -128,12 +113,12 @@ export const EmergencyBroadcastOverlay: React.FC<EmergencyBroadcastOverlayProps>
         }
     }
 
-    async function stopSound() {
-        if (sound) {
+    function stopSound() {
+        if (playerRef.current) {
             try {
-                await sound.stopAsync();
-                await sound.unloadAsync();
-                setSound(null);
+                playerRef.current.pause();
+                playerRef.current.remove();
+                playerRef.current = null;
             } catch (e) {
                 console.log('Error stopping sound:', e);
             }
