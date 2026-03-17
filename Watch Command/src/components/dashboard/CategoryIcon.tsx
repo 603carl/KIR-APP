@@ -67,7 +67,7 @@ const categoryConfig: Record<IncidentCategory, {
   },
   other: {
     icon: MoreHorizontal,
-    label: 'Other',
+    label: 'Other / Custom',
     colorClass: 'text-category-other',
     bgClass: 'bg-category-other/20'
   }

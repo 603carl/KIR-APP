@@ -35,6 +35,7 @@ export interface Incident {
   title: string;
   description: string;
   category: IncidentCategory;
+  displayCategory?: string;
   severity: IncidentSeverity;
   status: IncidentStatus;
   location: {

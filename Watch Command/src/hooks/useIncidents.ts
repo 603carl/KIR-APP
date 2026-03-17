@@ -82,6 +82,7 @@ export function useIncidents(filters?: FilterState, options?: { refreshInterval?
             title: row.title || 'Untitled Incident',
             description: row.description || 'No description provided.',
             category: mapCategory(row.category),
+            displayCategory: row.category || 'Other',
             severity: (row.severity?.toLowerCase() as any) || 'low',
             status: status as any,
             location: {

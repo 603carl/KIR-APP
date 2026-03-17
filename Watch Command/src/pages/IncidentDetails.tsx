@@ -355,7 +355,7 @@ export default function IncidentDetails() {
                             <StatusBadge status={incident.status} />
                             <div className="flex items-center gap-1.5 text-sm text-muted-foreground bg-muted/30 px-2 py-1 rounded-md">
                                 <CategoryIcon category={incident.category} size="sm" />
-                                {getCategoryLabel(incident.category)}
+                                {incident.displayCategory || getCategoryLabel(incident.category)}
                             </div>
                         </div>
                     </div>

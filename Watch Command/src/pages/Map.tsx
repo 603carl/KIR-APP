@@ -324,7 +324,7 @@ export default function MapPage() {
                 <StatusBadge status={selectedIncident.status} />
                 <Badge variant="outline" className="gap-1">
                   <CategoryIcon category={selectedIncident.category} size="sm" />
-                  {getCategoryLabel(selectedIncident.category)}
+                  {selectedIncident.displayCategory || getCategoryLabel(selectedIncident.category)}
                 </Badge>
               </div>
 

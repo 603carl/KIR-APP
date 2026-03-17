@@ -378,7 +378,7 @@ function IncidentCard({
       <div className="flex items-center gap-2 mt-2">
         <CategoryIcon category={incident.category as any} size="sm" showBackground />
         <span className="text-xs text-muted-foreground">
-          {getCategoryLabel(incident.category as any)}
+          {incident.displayCategory || getCategoryLabel(incident.category as any)}
         </span>
         <StatusBadge status={incident.status as any} size="sm" showIcon={false} />
       </div>
