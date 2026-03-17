@@ -16,6 +16,7 @@ import {
     HeartPulse,
     LocateFixed,
     MapPin,
+    MoreHorizontal,
     Shield,
     Truck,
     Zap
@@ -34,6 +35,7 @@ const CATEGORIES = [
     { id: '4', title: 'Security & Safety', icon: Shield, color: '#EF4444', desc: 'Crime reports, suspicious activity' },
     { id: '5', title: 'Fire & Rescue', icon: AlertCircle, color: '#F97316', desc: 'House fires, wildfires, rescue' },
     { id: '6', title: 'Health Emergency', icon: HeartPulse, color: '#EC4899', desc: 'Medical emergencies, outbreaks' },
+    { id: '7', title: 'Other / Custom Incident', icon: MoreHorizontal, color: '#6B7280', desc: 'Something else not listed here' },
 ];
 
 const STAGES = ['Category', 'Details', 'Location', 'Submit'];
@@ -41,6 +43,7 @@ const STAGES = ['Category', 'Details', 'Location', 'Submit'];
 export default function ReportScreen() {
     const [step, setStep] = useState(0);
     const [selectedCat, setSelectedCat] = useState<string | null>(null);
+    const [customCategoryTitle, setCustomCategoryTitle] = useState('');
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [severity, setSeverity] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
@@ -189,6 +192,9 @@ export default function ReportScreen() {
 
     const getCategoryTitle = () => {
         const cat = CATEGORIES.find(c => c.id === selectedCat);
+        if (cat?.id === '7' && customCategoryTitle.trim()) {
+            return customCategoryTitle.trim();
+        }
         return cat ? cat.title : 'Not Selected';
     };
 
@@ -241,6 +247,21 @@ export default function ReportScreen() {
                                     onChangeText={setTitle}
                                 />
                             </View>
+
+                            {selectedCat === '7' && (
+                                <>
+                                    <Text style={styles.inputLabel}>Custom Category Name</Text>
+                                    <View style={styles.inputBox}>
+                                        <TextInput
+                                            placeholder="e.g. Alien Invasion"
+                                            style={styles.textInput}
+                                            placeholderTextColor={COLORS.textMuted}
+                                            value={customCategoryTitle}
+                                            onChangeText={setCustomCategoryTitle}
+                                        />
+                                    </View>
+                                </>
+                            )}
 
                             <Text style={styles.inputLabel}>Severity Level</Text>
                             <View style={styles.severityRow}>
@@ -485,7 +506,7 @@ export default function ReportScreen() {
 
     const isNextDisabled = () => {
         if (step === 0) return !selectedCat;
-        if (step === 1) return !title || !description || uploading;
+        if (step === 1) return !title || !description || uploading || (selectedCat === '7' && !customCategoryTitle.trim());
         if (step === 2) return !locationConfirmed;
         return false;
     };
