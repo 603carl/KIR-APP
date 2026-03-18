@@ -18,12 +18,17 @@
         "UIBackgroundModes": [
           "remote-notification",
           "fetch",
+          "audio",
+          "remote-notification",
+          "fetch",
           "audio"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       },
       "entitlements": {
         "com.apple.developer.usernotifications.critical-alerts": true
-      }
+      },
+      "bundleIdentifier": "com.publickenyaapp.kenyaincidentreport"
     },
     "android": {
       "adaptiveIcon": {
@@ -38,7 +43,18 @@
         "VIBRATE",
         "USE_FULL_SCREEN_INTENT",
         "SCHEDULE_EXACT_ALARM",
-        "SYSTEM_ALERT_WINDOW"
+        "SYSTEM_ALERT_WINDOW",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CALL_PHONE",
+        "android.permission.DISABLE_KEYGUARD",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+        "android.permission.MANAGE_OWN_CALLS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK"
       ]
     },
     "web": {

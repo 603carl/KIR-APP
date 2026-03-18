@@ -11,12 +11,22 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { supabase } from '@/lib/supabase';
 import { useAssets } from 'expo-asset';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useRootNavigationState, useRouter, useSegments } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { useCallback, useRef, useState } from 'react';
 import { Alert, AppState, Linking, LogBox, Platform, Text, TouchableOpacity } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+// Conditionally import expo-notifications (not available in Expo Go)
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+let Notifications: any = null;
+if (!isExpoGo) {
+    try {
+        Notifications = require('expo-notifications');
+    } catch (e) { }
+}
 
 // Ignore specific warnings if necessary
 LogBox.ignoreLogs(['Reading the project root', 'NativeEventEmitter']);
@@ -173,6 +183,30 @@ export default function RootLayout() {
                 setIsNavigationReady(true);
                 setTimeout(async () => {
                     await SplashScreen.hideAsync().catch(() => { });
+
+                    // ─── Cold Start Broadcast Check ──────────────────
+                    // If the app was killed and user tapped a broadcast notification
+                    // to relaunch it, catch that here and show the overlay immediately.
+                    if (Notifications) {
+                        try {
+                            const lastResponse = await Notifications.getLastNotificationResponseAsync();
+                            if (lastResponse) {
+                                const data = lastResponse.notification?.request?.content?.data;
+                                if (data && (data.broadcastId || data.isBroadcast)) {
+                                    console.log('[Layout] Cold start broadcast detected:', JSON.stringify(data));
+                                    setActiveBroadcast({
+                                        id: data.broadcastId || 'coldstart-' + Date.now(),
+                                        title: data.title || lastResponse.notification?.request?.content?.title || 'Emergency Alert',
+                                        message: data.message || lastResponse.notification?.request?.content?.body || '',
+                                        severity: data.severity || 'extreme',
+                                        created_at: new Date().toISOString()
+                                    });
+                                }
+                            }
+                        } catch (coldStartErr) {
+                            console.log('[Layout] Cold start check error:', coldStartErr);
+                        }
+                    }
                 }, 100);
             }
         }

@@ -14,17 +14,9 @@ if (!isExpoGo) {
     } catch (e) { }
 }
 
-// Configure how notifications should be handled when the app is in the foreground
-if (Notifications) {
-    Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-            shouldShowBanner: true,
-            shouldShowList: true,
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-        }),
-    });
-}
+// NOTE: The notification handler is configured in usePushNotifications.ts
+// Do NOT add setNotificationHandler here — it would override the handler
+// in the hook that triggers FSI for emergency broadcasts.
 
 export async function registerForPushNotificationsAsync() {
     if (isExpoGo || !isDevice || !Notifications) {

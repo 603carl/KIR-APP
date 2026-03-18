@@ -11,6 +11,12 @@ import type { ForegroundOptionsModel } from 'react-native-full-screen-notificati
 const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_EMERGENCY_NOTIFICATION';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
+// ─── Versioned Channel ID ────────────────────────────────────────────
+// Android caches notification channel settings at creation time.
+// If you change sound/importance/vibration, you MUST bump the version
+// so Android creates a fresh channel with the new settings.
+const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v2';
+
 let Notifications: any = null;
 let RNIncomingCall: any = null;
 if (!isExpoGo) {
@@ -24,6 +30,8 @@ if (!isExpoGo) {
 }
 
 // ─── Notification Handler (Foreground) ───────────────────────────────
+// SINGLE source of truth for foreground notification handling.
+// Do NOT add another setNotificationHandler elsewhere (e.g. lib/notifications.ts).
 if (Notifications) {
     Notifications.setNotificationHandler({
         handleNotification: async (notification: any) => {
@@ -46,7 +54,8 @@ if (Notifications) {
 
 // ─── Background Notification Task ────────────────────────────────────
 // This fires when a push arrives while the app is killed or in background.
-// It's the key to "phone takeover" — we trigger the native FSI from here.
+// On Android, this is invoked by the system when a data-bearing notification
+// is received. We trigger the native FSI from here for "phone takeover".
 if (!isExpoGo && Notifications) {
     TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
         if (error) {
@@ -59,15 +68,24 @@ if (!isExpoGo && Notifications) {
 
         console.log('[BG Task] Background notification received:', JSON.stringify(notificationData));
 
-        // Only trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
+        // Trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
         if (notificationData.isBroadcast && Platform.OS === 'android') {
-            triggerFullScreenAlert(notificationData);
+            try {
+                triggerFullScreenAlert(notificationData);
+            } catch (fsiErr) {
+                // The native module bridge may not be fully initialized in background.
+                // In this case, the standard notification in the tray will still appear
+                // (because the push payload has title+body), and tapping it will open the app.
+                console.warn('[BG Task] FSI trigger failed (expected if app was killed):', fsiErr);
+            }
         }
     });
 
-    // Register the background task
+    // Register the background task — this tells expo-notifications to invoke
+    // our task when a remote notification arrives while the app is not in foreground.
     Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK).catch((err: any) => {
-        console.log('[BG Task] Registration (may already be registered):', err?.message);
+        // This will log "already registered" on subsequent mounts — that's normal.
+        console.log('[BG Task] Registration:', err?.message || 'success');
     });
 }
 
@@ -84,7 +102,7 @@ function triggerFullScreenAlert(data: any) {
         console.log('[FSI] Triggering full-screen emergency alert:', uuid);
 
         const foregroundOptions: ForegroundOptionsModel = {
-            channelId: 'emergency-broadcasts',
+            channelId: EMERGENCY_CHANNEL_ID,
             channelName: 'Emergency Broadcasts',
             notificationIcon: 'ic_notification', // Android mipmap icon
             notificationTitle: title,
@@ -123,6 +141,7 @@ export interface NotificationBroadcastData {
 export function usePushNotifications(onBroadcastReceived?: (data: NotificationBroadcastData) => void) {
     const notificationListener = useRef<any | null>(null);
     const responseListener = useRef<any | null>(null);
+    const coldStartChecked = useRef(false);
 
     async function registerForPushNotificationsAsync() {
         if (isExpoGo) {
@@ -133,8 +152,10 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         let token;
 
         if (Platform.OS === 'android') {
-            // Create high-priority notification channel for emergency broadcasts
-            await Notifications.setNotificationChannelAsync('emergency-broadcasts', {
+            // Create versioned emergency broadcast channel
+            // The v2 suffix forces Android to create a new channel with correct settings
+            // (old channels cache their config and ignore code changes)
+            await Notifications.setNotificationChannelAsync(EMERGENCY_CHANNEL_ID, {
                 name: 'Emergency Broadcasts',
                 importance: Notifications.AndroidImportance.MAX,
                 vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
@@ -152,6 +173,11 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                 importance: Notifications.AndroidImportance.HIGH,
                 showBadge: true,
             });
+
+            // Clean up old channel to avoid confusion
+            try {
+                await Notifications.deleteNotificationChannelAsync('emergency-broadcasts');
+            } catch (_) { /* old channel may not exist */ }
         }
 
         if (Device.isDevice) {
@@ -219,6 +245,31 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                 syncToken();
             }
         });
+
+        // ─── Cold Start Handler ──────────────────────────────────────
+        // When the app was killed and user taps a notification to open it,
+        // the response listener may not fire because it was registered too late.
+        // getLastNotificationResponseAsync() captures this scenario.
+        if (!coldStartChecked.current && Notifications) {
+            coldStartChecked.current = true;
+            Notifications.getLastNotificationResponseAsync()
+                .then((response: any) => {
+                    if (response) {
+                        const data = response.notification.request.content.data as NotificationBroadcastData;
+                        if (data && (data.broadcastId || data.severity || data.isBroadcast)) {
+                            console.log('[Push] Cold start: notification tapped while app was killed:', JSON.stringify(data));
+                            onBroadcastReceived?.({
+                                ...data,
+                                title: data.title || response.notification.request.content.title || undefined,
+                                message: data.message || response.notification.request.content.body || undefined,
+                            });
+                        }
+                    }
+                })
+                .catch((err: any) => {
+                    console.log('[Push] Cold start check error:', err);
+                });
+        }
 
         // ─── Notification Data Extractor ─────────────────────────────
         const handleNotificationData = (notification: any) => {

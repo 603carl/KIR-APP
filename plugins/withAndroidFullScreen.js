@@ -44,6 +44,8 @@ function withAndroidFullScreen(config) {
             'android.permission.SCHEDULE_EXACT_ALARM',
             'android.permission.POST_NOTIFICATIONS',
             'android.permission.SYSTEM_ALERT_WINDOW',
+            'android.permission.DISABLE_KEYGUARD',
+            'android.permission.FOREGROUND_SERVICE_SHORT_SERVICE',
         ];
 
         for (const perm of requiredPermissions) {
