@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useRouter } from 'expo-router';
 import {
+    AlertTriangle,
     Award,
     Bell,
     ChevronRight,
@@ -15,6 +16,7 @@ import {
     LogOut,
     Shield,
     Star,
+    Trash2,
     TrendingUp,
     User
 } from 'lucide-react-native';
@@ -60,6 +62,12 @@ export default function ProfileScreen() {
     // Security States
     const [isBiometricSupported, setIsBiometricSupported] = useState(false);
     const [isBiometricEnrolled, setIsBiometricEnrolled] = useState(false);
+
+    // Account Deletion States
+    const [deletionModalVisible, setDeletionModalVisible] = useState(false);
+    const [deletionStep, setDeletionStep] = useState<'confirm' | 'otp'>('confirm');
+    const [deletionOtp, setDeletionOtp] = useState('');
+    const [deletionLoading, setDeletionLoading] = useState(false);
 
     useEffect(() => {
         fetchProfile();
@@ -285,6 +293,62 @@ export default function ProfileScreen() {
         router.replace('/auth/login');
     };
 
+    const handleRequestDeletion = async () => {
+        setDeletionLoading(true);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) throw new Error('Not authenticated');
+
+            const { data, error } = await supabase.functions.invoke('request-account-deletion', {
+                headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+
+            if (error) throw error;
+
+            // If Resend is not configured, the mock OTP is returned for dev testing
+            if (data?.mockOtpIfNoResend) {
+                Alert.alert('Dev Mode', `Your OTP (no email provider active): ${data.mockOtpIfNoResend}`);
+            } else {
+                Alert.alert('Email Sent', 'A 6-digit verification code has been sent to your email.');
+            }
+            setDeletionStep('otp');
+        } catch (error: any) {
+            Alert.alert('Error', error.message || 'Failed to initiate deletion request.');
+        } finally {
+            setDeletionLoading(false);
+        }
+    };
+
+    const handleConfirmDeletion = async () => {
+        if (deletionOtp.length !== 6) {
+            Alert.alert('Invalid Code', 'Please enter the 6-digit code sent to your email.');
+            return;
+        }
+        setDeletionLoading(true);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) throw new Error('Not authenticated');
+
+            const { data, error } = await supabase.functions.invoke('confirm-account-deletion', {
+                headers: { Authorization: `Bearer ${session.access_token}` },
+                body: { token: deletionOtp },
+            });
+
+            if (error) throw error;
+
+            Alert.alert('Account Deleted', 'Your account has been permanently removed.', [
+                { text: 'OK', onPress: () => {
+                    supabase.auth.signOut();
+                    router.replace('/auth/login');
+                }}
+            ]);
+        } catch (error: any) {
+            Alert.alert('Error', error.message || 'Deletion failed. Check your code and try again.');
+        } finally {
+            setDeletionLoading(false);
+        }
+    };
+
     const MenuItem = ({ icon: Icon, title, subtitle, onPress, showSwitch, value, onValueChange, iconColor = COLORS.primary, iconBg = '#F8F9FA' }: any) => (
         <TouchableOpacity style={styles.menuItem} onPress={onPress}>
             <View style={[styles.menuIconContainer, { backgroundColor: iconBg }]}>
@@ -495,6 +559,38 @@ export default function ProfileScreen() {
                             <Text style={styles.logoutText}>Sign Out</Text>
                         </MotiView>
                     </TouchableOpacity>
+
+                    {/* Danger Zone */}
+                    <Text style={[styles.sectionTitle, { color: '#E11D48', marginTop: 24 }]}>Danger Zone</Text>
+                    <View style={[styles.card, { borderColor: '#FEE2E2', borderWidth: 1 }]}>
+                        <TouchableOpacity
+                            style={styles.menuItem}
+                            onPress={() => {
+                                Alert.alert(
+                                    'Delete Account',
+                                    'This action is irreversible. You will receive a verification code via email to confirm. Are you sure you want to proceed?',
+                                    [
+                                        { text: 'Cancel', style: 'cancel' },
+                                        { text: 'Yes, Delete', style: 'destructive', onPress: () => {
+                                            setDeletionStep('confirm');
+                                            setDeletionOtp('');
+                                            setDeletionModalVisible(true);
+                                        }}
+                                    ]
+                                );
+                            }}
+                            activeOpacity={0.7}
+                        >
+                            <View style={[styles.menuIconContainer, { backgroundColor: '#FEF2F2' }]}>
+                                <Trash2 size={20} color="#E11D48" />
+                            </View>
+                            <View style={styles.menuTextContainer}>
+                                <Text style={[styles.menuTitle, { color: '#E11D48' }]}>Delete Account</Text>
+                                <Text style={styles.menuSubtitle}>Permanently remove your account and all data</Text>
+                            </View>
+                            <ChevronRight size={18} color="#FCA5A5" />
+                        </TouchableOpacity>
+                    </View>
 
                     <Text style={styles.versionText}>Version 1.0.0 (Premium Build)</Text>
                     <View style={{ height: 120 }} />
@@ -732,6 +828,76 @@ export default function ProfileScreen() {
                     </View>
                 </KeyboardAvoidingView>
             </Modal >
+
+            {/* Account Deletion OTP Modal */}
+            <Modal
+                visible={deletionModalVisible}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setDeletionModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <TouchableOpacity
+                        style={styles.modalCloseOverlay}
+                        activeOpacity={1}
+                        onPress={() => setDeletionModalVisible(false)}
+                    />
+                    <View style={[styles.modalContent, { height: 'auto', maxHeight: Dimensions.get('window').height * 0.55, paddingBottom: Math.max(20, insets.bottom) }]}>
+                        <View style={styles.modalHeader}>
+                            <View style={styles.modalHandle} />
+                            <View style={{ alignItems: 'center', marginTop: 10 }}>
+                                <View style={{ backgroundColor: '#FEF2F2', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                                    <AlertTriangle size={28} color="#E11D48" />
+                                </View>
+                                <Text style={[styles.modalTitle, { color: '#E11D48' }]}>Delete Account</Text>
+                            </View>
+                        </View>
+
+                        {deletionStep === 'confirm' ? (
+                            <View style={{ paddingHorizontal: 24, paddingBottom: 20 }}>
+                                <Text style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+                                    A 6-digit verification code will be sent to your registered email address. You must enter this code to confirm the permanent deletion of your account.
+                                </Text>
+                                <TouchableOpacity
+                                    style={[styles.saveBtn, { backgroundColor: '#E11D48' }]}
+                                    onPress={handleRequestDeletion}
+                                    disabled={deletionLoading}
+                                >
+                                    {deletionLoading ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.saveBtnText}>Send Verification Code</Text>}
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.closeBtn} onPress={() => setDeletionModalVisible(false)}>
+                                    <Text style={styles.closeBtnText}>Cancel</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : (
+                            <View style={{ paddingHorizontal: 24, paddingBottom: 20 }}>
+                                <Text style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
+                                    Enter the 6-digit code sent to your email to permanently delete your account.
+                                </Text>
+                                <TextInput
+                                    style={[styles.modalInput, { textAlign: 'center', fontSize: 28, letterSpacing: 12, fontWeight: '900' }]}
+                                    value={deletionOtp}
+                                    onChangeText={(text) => setDeletionOtp(text.replace(/[^0-9]/g, '').slice(0, 6))}
+                                    keyboardType="number-pad"
+                                    maxLength={6}
+                                    placeholder="------"
+                                    placeholderTextColor="#CBD5E1"
+                                />
+                                <TouchableOpacity
+                                    style={[styles.saveBtn, { backgroundColor: '#E11D48', marginTop: 20 }]}
+                                    onPress={handleConfirmDeletion}
+                                    disabled={deletionLoading || deletionOtp.length !== 6}
+                                >
+                                    {deletionLoading ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.saveBtnText}>Confirm Permanent Deletion</Text>}
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.closeBtn} onPress={() => { setDeletionStep('confirm'); setDeletionOtp(''); }}>
+                                    <Text style={styles.closeBtnText}>Resend Code</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+                </View>
+            </Modal>
         </View >
     );
 }
