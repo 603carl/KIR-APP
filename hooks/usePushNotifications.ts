@@ -3,8 +3,8 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Platform, AppState } from 'react-native';
 import type { ForegroundOptionsModel } from 'react-native-full-screen-notification-incoming-call';
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -181,30 +181,40 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         }
 
         if (Device.isDevice) {
-            const { status: existingStatus } = await Notifications.getPermissionsAsync();
+            const { status: existingStatus, canAskAgain } = await Notifications.getPermissionsAsync();
             let finalStatus = existingStatus;
-            if (existingStatus !== 'granted') {
+            
+            if (existingStatus !== 'granted' && canAskAgain) {
                 const { status } = await Notifications.requestPermissionsAsync({
                     ios: {
                         allowAlert: true,
                         allowBadge: true,
                         allowSound: true,
-                        allowCriticalAlerts: true,  // iOS: Request critical alert permission
+                        allowCriticalAlerts: true,
                     },
+                    // Android 13+ requires explicit POST_NOTIFICATIONS permission
                 });
                 finalStatus = status;
             }
-            if (finalStatus !== 'granted') {
-                console.warn('Failed to get push token for push notification!');
-                return;
-            }
-            token = (await Notifications.getExpoPushTokenAsync({
-                projectId: '2ba9174f-05c8-4a7c-a227-86485c2803cd',
-            })).data;
 
-            console.log('Push Token:', token);
+            if (finalStatus !== 'granted') {
+                console.warn('Push notification permission NOT granted. Current status:', finalStatus);
+                // On Android 13+, if permission is denied, the app cannot show notifications.
+                // We should log this clearly for debugging production issues.
+                return null;
+            }
+
+            try {
+                token = (await Notifications.getExpoPushTokenAsync({
+                    projectId: '2ba9174f-05c8-4a7c-a227-86485c2803cd',
+                })).data;
+                console.log('Push Token successfully acquired:', token);
+            } catch (tokenErr) {
+                console.error('Error fetching Expo Push Token:', tokenErr);
+                return null;
+            }
         } else {
-            console.warn('Must use physical device for Push Notifications');
+            console.warn('Push registration skipped: Not a physical device');
         }
 
         return token;
@@ -316,8 +326,19 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             });
         }
 
+        // ─── AppState Listener (Re-sync on return) ──────────────────
+        // If user goes to settings to enable notifications, we want to
+        // grab the token immediately when they return.
+        const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+            if (nextAppState === 'active') {
+                console.log('[AppState] App returned to foreground, re-syncing token...');
+                syncToken();
+            }
+        });
+
         return () => {
             authSubscription.unsubscribe();
+            appStateSubscription.remove();
             if (notificationListener.current) {
                 notificationListener.current.remove();
             }
