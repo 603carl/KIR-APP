@@ -1,12 +1,15 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+// @ts-nocheck
+/// <reference types="https://esm.sh/@supabase/supabase-js@2" />
+/// <reference lib="deno.ns" />
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders });
     }
@@ -79,9 +82,6 @@ serve(async (req: Request) => {
         if (deletionError) {
              throw new Error('Supabase GoTrue User Deletion Failed: ' + deletionError.message);
         }
-
-        // We do not need to manually delete the record because it should cascade when auth.users is deleted.
-        // But just to be meticulously clean, if cascade takes a ms, we return early:
 
         return new Response(JSON.stringify({ message: 'Account permanently deleted' }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },

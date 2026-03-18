@@ -1,12 +1,15 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+// @ts-nocheck
+/// <reference types="https://esm.sh/@supabase/supabase-js@2" />
+/// <reference lib="deno.ns" />
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders });
     }
@@ -56,7 +59,7 @@ serve(async (req: Request) => {
             throw new Error('Failed to create request: ' + insertError.message);
         }
 
-        // Mock email functionality block
+        // Send email via Resend if configured, otherwise mock for dev
         const resendApiKey = Deno.env.get('RESEND_API_KEY');
         if (resendApiKey) {
             const resData = await fetch('https://api.resend.com/emails', {
@@ -69,17 +72,11 @@ serve(async (req: Request) => {
                     from: 'Watch Command <security@watchcommand.co.ke>',
                     to: [user.email],
                     subject: 'Kenya Incident Reporter: Account Deletion Request',
-                    html: `
-                        <h2>Account Deletion Request</h2>
-                        <p>We received a request to permanently delete your account.</p>
-                        <p>Your 6-digit confirmation code is: <strong>` + otp + `</strong></p>
-                        <p>This code expires in 15 minutes. If you did not request this, please secure your account immediately.</p>
-                    `
+                    html: '<h2>Account Deletion Request</h2><p>We received a request to permanently delete your account.</p><p>Your 6-digit confirmation code is: <strong>' + otp + '</strong></p><p>This code expires in 15 minutes. If you did not request this, please secure your account immediately.</p>'
                 })
             });
             if (!resData.ok) {
                  console.error('Failed to send email:', await resData.text());
-                 // We don't throw here to avoid leaking issues to client, but log it.
             }
         } else {
             console.log('[MOCK EMAIL SENT] To: ' + user.email + ', OTP: ' + otp);
