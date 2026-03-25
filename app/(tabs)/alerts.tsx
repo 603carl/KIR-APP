@@ -15,6 +15,7 @@ import {
 import { MotiView } from 'moti';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+    Alert,
     Animated,
     Dimensions,
     PanResponder,
@@ -236,25 +237,32 @@ export default function AlertsScreen() {
                 ]);
                 if (ack) localAcknowledged = JSON.parse(ack);
                 if (del) localDeleted = JSON.parse(del);
+                
+                // Keep state in sync
+                setAcknowledgedIds(localAcknowledged);
+                setDeletedIds(localDeleted);
             } catch (e) { }
 
-            // Fetch in parallel
             const installDate = await SecureStore.getItemAsync('install_date');
 
+            // CRITICAL: Load with LIMIT to prevent "White Screen" and 1-minute lag
             const [personalRes, broadcastRes] = await Promise.all([
                 supabase.from('notifications')
                     .select('*')
                     .eq('user_id', user.id)
-                    .gt('created_at', installDate || user.created_at),
+                    .gt('created_at', installDate || user.created_at)
+                    .order('created_at', { ascending: false })
+                    .limit(50), 
                 supabase.from('broadcasts')
                     .select('*')
                     .gt('created_at', installDate || user.created_at)
+                    .order('created_at', { ascending: false })
+                    .limit(50)
             ]);
 
             if (personalRes.error) throw personalRes.error;
             if (broadcastRes.error) throw broadcastRes.error;
 
-            // Map broadcasts to notification format
             const mappedBroadcasts: Notification[] = (broadcastRes.data || []).map(b => ({
                 id: b.id,
                 title: b.title,
@@ -265,16 +273,15 @@ export default function AlertsScreen() {
                 isBroadcast: true
             }));
 
-            // Add isBroadcast flag to personal notifications
             const personalNotifications: Notification[] = (personalRes.data || []).map(n => ({
                 ...n,
                 isBroadcast: false
             }));
 
-            // Combine, filter deleted, and sort
             const combined = [...mappedBroadcasts, ...personalNotifications]
                 .filter(n => !localDeleted.includes(n.id))
-                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                .slice(0, 50); // Hard secondary limit for UI stability
 
             setNotifications(combined);
         } catch (error) {
@@ -287,14 +294,20 @@ export default function AlertsScreen() {
     const markAsRead = async (id: string, isBroadcast: boolean) => {
         try {
             if (isBroadcast) {
-                const updatedIds = [...new Set([...acknowledgedIds, id])];
+                const currentAck = await SecureStore.getItemAsync('acknowledged_broadcasts');
+                const ackList = currentAck ? JSON.parse(currentAck) : [];
+                const updatedIds = [...new Set([...ackList, id])];
                 setAcknowledgedIds(updatedIds);
                 await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
             } else {
-                await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+                const { error } = await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+                if (error) throw error;
             }
 
-            // Sync with other components (Tabs badge)
+            // Optimistic UI update
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+
+            // Sync with other components
             supabase.channel('local-sync').send({
                 type: 'broadcast',
                 event: 'refresh-unread-count',
@@ -306,30 +319,35 @@ export default function AlertsScreen() {
 
     const deleteNotification = async (id: string, isBroadcast: boolean) => {
         try {
-            // Remove from UI immediately
-            setNotifications(prev => prev.filter(n => n.id !== id));
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-            if (isBroadcast) {
-                // Store locally as deleted (broadcasts can't be deleted from server)
-                const updatedDeleted = [...new Set([...deletedIds, id])];
-                setDeletedIds(updatedDeleted);
-                await SecureStore.setItemAsync('deleted_notifications', JSON.stringify(updatedDeleted));
-            } else {
-                // For personal notifications, mark as read on server so count updates
+            // 1. Get current deleted list from store
+            const currentDel = await SecureStore.getItemAsync('deleted_notifications');
+            const delList = currentDel ? JSON.parse(currentDel) : [];
+            const updatedDeleted = [...new Set([...delList, id])];
+            
+            // 2. Persist to store immediately
+            await SecureStore.setItemAsync('deleted_notifications', JSON.stringify(updatedDeleted));
+            setDeletedIds(updatedDeleted);
+
+            // 3. Update server side for personal notifications (hard delete or flag)
+            if (!isBroadcast) {
+                // For personal notifications, we also mark as read so they don't count in badge
                 await supabase.from('notifications').update({ is_read: true }).eq('id', id);
             }
 
-            // Sync with other components
+            // 4. Update UI state
+            setNotifications(prev => prev.filter(n => n.id !== id));
+
+            // 5. Sync count across app
             supabase.channel('local-sync').send({
                 type: 'broadcast',
                 event: 'refresh-unread-count',
             });
 
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } catch (e) {
             console.error('Delete error:', e);
-            // Refetch on error to restore state
-            fetchNotifications();
+            Alert.alert('Error', 'Failed to delete notification.');
         }
     };
 
@@ -342,34 +360,44 @@ export default function AlertsScreen() {
 
     const markAllRead = async () => {
         try {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            // Mark personal notifications as read
-            await supabase
+            // 1. Server-side update for personal
+            const { error: personalError } = await supabase
                 .from('notifications')
                 .update({ is_read: true })
-                .eq('user_id', user.id);
+                .eq('user_id', user.id)
+                .eq('is_read', false); // Only update unread
+            
+            if (personalError) throw personalError;
 
-            // Mark all broadcasts as acknowledged
+            // 2. Local-store update for broadcasts
             const broadcastIds = notifications
-                .filter(n => n.isBroadcast)
+                .filter(n => n.isBroadcast && !n.is_read)
                 .map(n => n.id);
-            const combinedIds = [...new Set([...acknowledgedIds, ...broadcastIds])];
-            setAcknowledgedIds(combinedIds);
+            
+            const currentAck = await SecureStore.getItemAsync('acknowledged_broadcasts');
+            const ackList = currentAck ? JSON.parse(currentAck) : [];
+            const combinedIds = [...new Set([...ackList, ...broadcastIds])];
+            
             await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(combinedIds));
+            setAcknowledgedIds(combinedIds);
 
-            // Update local state
+            // 3. Optimistic UI update
             setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
 
-            // Sync with other components
+            // 4. Sync globally
             supabase.channel('local-sync').send({
                 type: 'broadcast',
                 event: 'refresh-unread-count',
             });
-        } catch (error) {
+
+            Alert.alert('Success', 'All notifications marked as read.');
+        } catch (error: any) {
             console.error('Error marking all as read:', error);
+            Alert.alert('Error', 'Could not clear notifications.');
         }
     };
 

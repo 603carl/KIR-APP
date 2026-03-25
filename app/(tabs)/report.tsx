@@ -137,16 +137,18 @@ export default function ReportScreen() {
                 if (profile?.county) finalCounty = profile.county;
             }
 
-            const { data: incidentData, error: insertError } = await supabase
+            // 1. DATABASE INSERT: Metadata first (Async)
+            // CRITICAL: Explicit 15s Timeout to prevent UI hang in production
+            const timeout = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
+            
+            const insertPromise = supabase
                 .from('incidents')
                 .insert([
                     {
                         user_id: user.id,
-                        title,
-                        description,
-                        severity,
-                        category: getCategoryTitle(),
-                        location: locationMethod === 'gps' ? locationName : landmarkName,
+                        title: getCategoryTitle(),
+                        category: selectedCat,
+                        description: description.trim(),
                         location_name: locationMethod === 'gps' ? locationName : landmarkName,
                         lat: coords.lat || -1.2921,
                         lng: coords.lng || 36.8219,
@@ -159,6 +161,11 @@ export default function ReportScreen() {
                 ])
                 .select()
                 .single();
+
+            const { data: incidentData, error: insertError } = await Promise.race([
+                insertPromise,
+                timeout(15000)
+            ]) as any;
 
             if (insertError) throw insertError;
 
@@ -195,7 +202,11 @@ export default function ReportScreen() {
 
         } catch (error: any) {
             console.error('Submission Error:', error);
-            Alert.alert('Error', error.message || 'Failed to submit report');
+            if (error.message === 'timeout') {
+                Alert.alert('Network Timeout', 'The server is taking too long to respond. Please check your internet connection and try again.');
+            } else {
+                Alert.alert('Submission Error', error.message || 'Failed to submit report. Please try again.');
+            }
         } finally {
             setIsSubmitting(false);
         }

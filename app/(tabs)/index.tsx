@@ -276,13 +276,16 @@ export default function DashboardScreen() {
             style: 'destructive',
             onPress: async () => {
               try {
+                const timeout = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
                 const { data: { user } } = await supabase.auth.getUser();
                 if (user) {
-                  await supabase
+                  const updatePromise = supabase
                     .from('sos_alerts')
                     .update({ status: 'cancelled' })
                     .eq('user_id', user.id)
                     .eq('status', 'active');
+                  
+                  await Promise.race([updatePromise, timeout(10000)]);
                 }
                 setSosActive(false);
                 Alert.alert('SOS Cancelled', 'Your emergency alert has been cancelled.');
@@ -302,8 +305,10 @@ export default function DashboardScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
 
     try {
-      // Use cached user for ZERO auth latency
-      let user = cachedUser.current;
+      // CRITICAL: Proactive Session Refresh before SOS to prevent JWT failure
+      const { data: sessionData } = await supabase.auth.refreshSession();
+      let user = sessionData.user;
+      
       if (!user) {
         const { data } = await supabase.auth.getUser();
         user = data.user;
@@ -337,13 +342,21 @@ export default function DashboardScreen() {
       }
 
       // 3. Fast-Path Insert: Coordinate-only insert to bypass slow geocoding
-      const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
+      // CRITICAL: Explicit 15s Timeout to prevent "infinite loading"
+      const timeout = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
+
+      const insertPromise = supabase.from('sos_alerts').insert({
         user_id: user.id,
         lat: lat || -1.2921, // Default to Nairobi center if total location failure
         lng: lng || 36.8219,
         location_name: 'Locating in progress...',
         status: 'active'
       }).select().single();
+
+      const { data: sosData, error: sosError } = await Promise.race([
+        insertPromise,
+        timeout(15000)
+      ]) as any;
 
       if (sosError) throw sosError;
 
@@ -381,7 +394,11 @@ export default function DashboardScreen() {
     } catch (error: any) {
       console.error('SOS EXECUTION FAILED:', error);
       setSosActive(false);
-      Alert.alert('SOS Failure', 'System link error. Please call 999 directly.');
+      if (error.message === 'timeout') {
+        Alert.alert('Timeout Error', 'The server is taking too long to respond. Your SOS may still be delivered, but please check your local connection or call 999.');
+      } else {
+        Alert.alert('SOS Failure', 'System link error. Please call 999 directly.');
+      }
     }
   };
 
