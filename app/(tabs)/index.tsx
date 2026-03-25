@@ -462,6 +462,148 @@ export default function DashboardScreen() {
             </LinearGradient>
           </View>
 
+          {/* SOS Horizontal 3D Redesign */}
+          <MotiView
+            from={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            style={styles.sosCardContainer}
+          >
+            <TouchableOpacity
+              onPress={handleSOS}
+              activeOpacity={0.9}
+              style={[styles.sosCardInner, sosActive && styles.sosCardInnerActive]}
+            >
+              <View style={styles.sosButtonContainer}>
+                <View style={styles.sos3DShadow} />
+                <LinearGradient
+                  colors={['#FF3B3B', '#DC2626', '#991B1B']}
+                  style={styles.sos3DButton}
+                >
+                  <View style={styles.sosInnerCircle}>
+                    <Text style={styles.sosButtonText}>SOS</Text>
+                  </View>
+                </LinearGradient>
+              </View>
+
+              <View style={styles.sosTextBody}>
+                <Text style={styles.sosMainLabel}>{sosActive ? 'SOS ACTIVE' : 'SOS Emergency'}</Text>
+                <Text style={styles.sosSubLabel}>Only For Emergency</Text>
+              </View>
+
+              {sosActive && (
+                <MotiView
+                  from={{ opacity: 0.4, scale: 1 }}
+                  animate={{ opacity: 1, scale: 1.2 }}
+                  transition={{ loop: true, type: 'timing', duration: 1000 }}
+                  style={styles.activePulse}
+                >
+                  <View style={styles.pulseDot} />
+                </MotiView>
+              )}
+            </TouchableOpacity>
+          </MotiView>
+
+          {/* Quick Categories */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Quick Report</Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/my-reports')}>
+              <Text style={styles.seeAll}>See All</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+            <TouchableOpacity
+              style={[styles.categoryCard, !selectedCategory && { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' }]}
+              onPress={() => setSelectedCategory(null)}
+            >
+              <View style={[styles.catIconBox, { backgroundColor: '#DBEAFE' }]}>
+                <TrendingUp color="#3B82F6" size={26} strokeWidth={2.5} />
+              </View>
+              <Text style={styles.catTitle}>All</Text>
+            </TouchableOpacity>
+            {CATEGORIES.map((cat) => (
+              <TouchableOpacity
+                key={cat.id}
+                style={[styles.categoryCard, selectedCategory === cat.title && { borderColor: cat.color, backgroundColor: cat.color + '10' }]}
+                onPress={() => setSelectedCategory(selectedCategory === cat.title ? null : cat.title)}
+              >
+                <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}>
+                  <cat.icon color={cat.color} size={26} strokeWidth={2.5} />
+                </View>
+                <Text style={styles.catTitle}>{cat.title}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {/* Recent Activity Feed */}
+          <View style={[styles.sectionHeader, { marginBottom: 12 }]}>
+            <View>
+              <Text style={styles.sectionTitle}>Community Feed</Text>
+              <MotiView
+                from={{ opacity: 0, translateX: -10 }}
+                animate={{ opacity: 1, translateX: 0 }}
+                style={styles.aiBadge}
+              >
+                <Zap size={12} color="#4A5568" />
+                <Text style={styles.aiBadgeText}>AI RANKED</Text>
+              </MotiView>
+            </View>
+            <View style={styles.liveIndicator}>
+              <View style={styles.dot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          </View>
+
+          {loading && incidents.length === 0 ? (
+            [1, 2, 3].map((key) => <SkeletonCard key={key} />)
+          ) : (
+            incidents.map((item, index) => (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => router.push(`/incident/${item.id}`)}
+                activeOpacity={0.9}
+              >
+                <MotiView
+                  from={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: index * 50 }}
+                  style={styles.incidentCard}
+                >
+                  <Image
+                    source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }}
+                    style={styles.incidentImage}
+                  />
+                  <LinearGradient
+                    colors={['transparent', 'rgba(0,0,0,0.8)']}
+                    style={styles.imageOverlay}
+                  />
+                  <View style={styles.incidentContent}>
+                    <View style={styles.incidentHeader}>
+                      <Text style={styles.incidentTitle}>{item.title}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}>
+                        <View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} />
+                        <Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Pending'}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.incidentLoc}>{item.location_name} • {getTimeAgo(item.created_at)}</Text>
+
+                    <View style={styles.incidentFooter}>
+                      <View style={styles.impactBox}>
+                        <TrendingUp size={14} color={COLORS.primary} />
+                        <Text style={styles.impactText}>{item.category}</Text>
+                      </View>
+                      <View style={styles.viewBtn}>
+                        <Text style={styles.viewBtnText}>View Details</Text>
+                        <ChevronRight size={14} color={COLORS.primary} />
+                      </View>
+                    </View>
+                  </View>
+                </MotiView>
+              </TouchableOpacity>
+            ))
+          )}
+
+          <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -474,7 +616,7 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.md },
   header: {
     paddingHorizontal: 4,
-    paddingTop: 0,
+    paddingTop: 8,
     paddingBottom: 4,
   },
   headerTopRow: {
@@ -484,8 +626,8 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   greeting: {
-    fontSize: 22,
-    color: '#4A5568',
+    fontSize: 24,
+    color: '#1A202C',
     fontWeight: '700',
     letterSpacing: -0.5,
   },
@@ -500,9 +642,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F0FDF4',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#DCFCE7',
   },
@@ -530,42 +672,89 @@ const styles = StyleSheet.create({
   statsLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700' },
   statsValue: { color: COLORS.white, fontSize: 32, fontWeight: '900', marginTop: 2 },
   statsTrend: { color: '#4ADE80', fontSize: 12, fontWeight: '800', marginTop: 4 },
-  sosContainer: {
-    marginBottom: SPACING.lg,
-  },
   sosCardContainer: {
     marginBottom: 24,
     borderRadius: 32,
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#171717',
     overflow: 'hidden',
     ...SHADOWS.premium,
   },
-    height: 54,
-    borderRadius: 27,
-    borderWidth: 2,
-    borderColor: COLORS.white,
+  sosCardInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+  },
+  sosCardInnerActive: {
+    backgroundColor: '#2D0A0A',
+  },
+  sosButtonContainer: {
+    width: 80,
+    height: 80,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sosTextMain: {
+  sos3DShadow: {
+    position: 'absolute',
+    bottom: 2,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#000',
+    opacity: 0.8,
+  },
+  sos3DButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 10,
+    borderWidth: 4,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  sosInnerCircle: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sosButtonText: {
     color: COLORS.white,
     fontSize: 16,
     fontWeight: '900',
+    letterSpacing: 1,
   },
-  sosLabelContainer: {
+  sosTextBody: {
     flex: 1,
-    marginLeft: 16,
+    marginLeft: 20,
   },
-  sosActionText: {
+  sosMainLabel: {
     color: COLORS.white,
     fontSize: 22,
     fontWeight: '900',
   },
-  sosWarningText: {
-    color: '#9CA3AF',
+  sosSubLabel: {
+    color: '#94A3B8',
     fontSize: 14,
     fontWeight: '700',
     marginTop: 2,
+  },
+  activePulse: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: 'rgba(239, 68, 68, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#EF4444',
   },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, marginTop: 12 },
   sectionTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, letterSpacing: -0.5 },
