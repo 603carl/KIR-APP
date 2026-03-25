@@ -18,6 +18,8 @@ import {
     Animated,
     Dimensions,
     PanResponder,
+    RefreshControl,
+    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -176,12 +178,18 @@ export default function AlertsScreen() {
     const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
     const [deletedIds, setDeletedIds] = useState<string[]>([]);
     const scrollViewRef = useRef<any>(null);
+    const [refreshing, setRefreshing] = useState(false);
 
     useEffect(() => {
         loadLocalData();
         fetchNotifications();
 
-        // Local broadcast channel for syncing between components
+        const channel = supabase.channel('public:broadcasts')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, () => {
+                fetchNotifications();
+            })
+            .subscribe();
+
         const localChannel = supabase.channel('local-sync')
             .on('broadcast', { event: 'refresh-unread-count' }, () => {
                 fetchNotifications();
@@ -189,8 +197,15 @@ export default function AlertsScreen() {
             .subscribe();
 
         return () => {
+            channel.unsubscribe();
             localChannel.unsubscribe();
         };
+    }, []);
+
+    const onRefresh = useCallback(async () => {
+        setRefreshing(true);
+        await fetchNotifications();
+        setRefreshing(false);
     }, []);
 
     const loadLocalData = async () => {
@@ -435,10 +450,18 @@ export default function AlertsScreen() {
                     )}
                 </View>
 
-                <Animated.ScrollView
+                <ScrollView
                     ref={scrollViewRef}
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.scroll}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={onRefresh}
+                            colors={[COLORS.primary]}
+                            tintColor={COLORS.primary}
+                        />
+                    }
                 >
                     {/* Swipe hint */}
                     {notifications.length > 0 && (
@@ -473,7 +496,7 @@ export default function AlertsScreen() {
                     )}
 
                     <View style={{ height: 120 }} />
-                </Animated.ScrollView>
+                </ScrollView>
             </SafeAreaView>
         </View>
     );

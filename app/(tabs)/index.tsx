@@ -15,8 +15,10 @@ import {
   ShieldCheck,
   TrendingUp,
   Truck,
-  Zap
+  Zap,
+  PhoneCall
 } from 'lucide-react-native';
+import * as Haptics from 'expo-haptics';
 import { MotiView } from 'moti';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Dimensions, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
@@ -261,7 +263,9 @@ export default function DashboardScreen() {
   };
 
   const handleSOS = async () => {
+    // 1. Instant UI Feedback - Visual and Haptic
     if (sosActive) {
+      // Cancellation still needs a check to prevent accidental stops
       Alert.alert(
         'Cancel SOS?',
         'Are you sure you want to cancel this emergency alert? Only do this if you are safe.',
@@ -284,7 +288,7 @@ export default function DashboardScreen() {
                 Alert.alert('SOS Cancelled', 'Your emergency alert has been cancelled.');
               } catch (e) {
                 console.error('Cancel SOS error:', e);
-                setSosActive(false); // UI fallback
+                setSosActive(false); 
               }
             }
           }
@@ -293,11 +297,12 @@ export default function DashboardScreen() {
       return;
     }
 
-    // INSTANT UI FEEDBACK - Activate immediately before any async work
+    // --- ONE-TAP ULTRA-FAST SOS PATH START ---
     setSosActive(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
 
     try {
-      // Use cached user for speed, fallback to fresh fetch
+      // Use cached user for ZERO auth latency
       let user = cachedUser.current;
       if (!user) {
         const { data } = await supabase.auth.getUser();
@@ -306,90 +311,77 @@ export default function DashboardScreen() {
 
       if (!user) {
         setSosActive(false);
-        Alert.alert('Authentication Required', 'Please log in to use SOS feature.');
+        Alert.alert('Error', 'Please log in to use SOS.');
         return;
       }
 
-      // Ensure profile exists (Safety check to prevent FK error)
-      const { data: profile } = await supabase.from('profiles').select('id').eq('id', user.id).single();
-      if (!profile) {
-        await supabase.from('profiles').insert({
-          id: user.id,
-          full_name: user.user_metadata?.full_name || 'Citizen',
-          email: user.email,
-          role: 'reporter'
-        });
-      }
-
-      // Use cached location if available for instant response, fetch fresh in background
+      // 2. Location Bypass - Try last known position FIRST for instant result
       let lat = userLocation?.coords.latitude;
       let lng = userLocation?.coords.longitude;
 
       if (!lat || !lng) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          setSosActive(false);
-          Alert.alert('Location Required', 'SOS needs your location to send help.');
-          return;
+        // Background request if cache is empty
+        const lastLoc = await Location.getLastKnownPositionAsync({});
+        if (lastLoc) {
+          lat = lastLoc.coords.latitude;
+          lng = lastLoc.coords.longitude;
+        } else {
+          // Deep fallback if device has NO location history
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const freshLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+            lat = freshLoc.coords.latitude;
+            lng = freshLoc.coords.longitude;
+          }
         }
-        const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        lat = location.coords.latitude;
-        lng = location.coords.longitude;
       }
 
-      let locationName = 'Unknown Location';
-
-      // Insert SOS alert immediately with coordinates (fast path)
+      // 3. Fast-Path Insert: Coordinate-only insert to bypass slow geocoding
       const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
         user_id: user.id,
-        lat,
-        lng,
-        location_name: 'Locating...',
+        lat: lat || -1.2921, // Default to Nairobi center if total location failure
+        lng: lng || 36.8219,
+        location_name: 'Locating in progress...',
         status: 'active'
       }).select().single();
 
       if (sosError) throw sosError;
 
-      // Enrich with location details in background
-      Location.reverseGeocodeAsync({ latitude: lat, longitude: lng })
-        .then(async (results) => {
-          if (results && results[0]) {
-            const loc = results[0];
-            const resolvedAddress = [loc.street, loc.district, loc.city].filter(Boolean).join(', ');
-            const county = normalizeCounty(loc.region || loc.city || '');
-            const subCounty = loc.subregion || loc.district || '';
+      // 4. Background Enrichment - Don't block the UI for geocoding
+      if (lat && lng) {
+        (async () => {
+          try {
+            const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+            if (results && results[0]) {
+              const loc = results[0];
+              const resolvedAddress = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
+              const county = normalizeCounty(loc.region || loc.city || '');
+              
+              await supabase.from('sos_alerts').update({
+                location_name: resolvedAddress || 'Street identified',
+                county: county
+              }).eq('id', sosData.id);
 
-            await supabase.from('sos_alerts').update({
-              location_name: resolvedAddress,
-              county: county,
-              sub_county: subCounty
-            }).eq('id', sosData.id);
-          }
-        })
-        .catch(err => console.error('Geocoding error:', err));
+              // Update system alerts table for Watch Command
+              await supabase.from('alerts').insert({
+                rule_name: 'SOS EMERGENCY',
+                message: `CRITICAL: SOS from user at ${resolvedAddress || 'Coordinates'}`,
+                severity: 'critical',
+                user_id: user.id,
+                sos_alert_id: sosData.id
+              });
+            }
+          } catch (e) { console.warn('[SOS Enrichment Failed]', e); }
+        })();
+      }
 
-      if (sosError) throw sosError;
-
-      // Create watch command alert in background (don't block UI)
-      (async () => {
-        try {
-          await supabase.from('alerts').insert({
-            rule_name: 'SOS Emergency',
-            message: `EMERGENCY SOS from user at ${locationName} (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
-            severity: 'critical',
-            acknowledged: false,
-            user_id: user.id,
-            sos_alert_id: sosData.id
-          });
-        } catch (e) { /* Background task, ignore errors */ }
-      })();
-
-      Alert.alert('SOS Sent', 'Emergency services have been notified. Stay calm, help is on the way.');
+      // 5. Confirmation (Non-blocking)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
 
     } catch (error: any) {
-      console.error('SOS Error:', error);
+      console.error('SOS EXECUTION FAILED:', error);
       setSosActive(false);
-      Alert.alert('SOS Failed', error.message || 'Could not send SOS. Please try again or call emergency services directly.');
+      Alert.alert('SOS Failure', 'System link error. Please call 999 directly.');
     }
   };
 

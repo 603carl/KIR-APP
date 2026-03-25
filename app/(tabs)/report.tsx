@@ -120,47 +120,28 @@ export default function ReportScreen() {
 
     const handleFinalSubmit = async () => {
         setIsSubmitting(true);
-        setUploading(true);
-        setUploadProgress(10);
         try {
             const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error("Auth session expired. Please login again.");
 
-            // 1. Upload media if any
-            const uploadedUrls: string[] = [];
-            if (mediaItems.length > 0) {
-                for (let i = 0; i < mediaItems.length; i++) {
-                    const url = await uploadMedia(mediaItems[i].uri);
-                    if (url) uploadedUrls.push(url);
-                    setUploadProgress(10 + Math.floor(((i + 1) / mediaItems.length) * 80));
-                }
-            }
-            setUploadProgress(90);
-
-            // 2. Fetch user's home county as fallback if needed
+            // 1. FAST PATH: Insert Incident metadata immediately
             let finalCounty = county;
             let finalSubCounty = subCounty;
 
             if (!finalCounty) {
-                console.log('No county detected from current location, fetching user home county...');
                 const { data: profile } = await supabase
                     .from('profiles')
                     .select('county')
-                    .eq('id', user?.id)
+                    .eq('id', user.id)
                     .single();
-
-                if (profile?.county) {
-                    finalCounty = profile.county;
-                    console.log('Using fallback home county:', finalCounty);
-                }
+                if (profile?.county) finalCounty = profile.county;
             }
 
-            // 3. Insert Incident
-            const locationValue = locationName?.trim() || 'Unknown Location';
-            const { error } = await supabase
+            const { data: incidentData, error: insertError } = await supabase
                 .from('incidents')
                 .insert([
                     {
-                        user_id: user?.id,
+                        user_id: user.id,
                         title,
                         description,
                         severity,
@@ -169,24 +150,54 @@ export default function ReportScreen() {
                         location_name: locationMethod === 'gps' ? locationName : landmarkName,
                         lat: coords.lat || -1.2921,
                         lng: coords.lng || 36.8219,
-                        county: finalCounty || 'Nairobi City', // Ultimate fallback to capital if everything fails
+                        county: finalCounty || 'Nairobi City',
                         sub_county: finalSubCounty || null,
                         anonymity: isAnonymous,
-                        media_urls: uploadedUrls,
+                        media_urls: [], // Start empty, fill in background
                         status: 'Pending'
                     }
-                ]);
+                ])
+                .select()
+                .single();
 
-            if (error) throw error;
+            if (insertError) throw insertError;
 
-            setUploadProgress(100);
-            Alert.alert('Success', 'Incident reported successfully!');
+            // 2. IMMEDIATE FEEDBACK: Success and Navigate
+            Alert.alert(
+              'Report Received', 
+              mediaItems.length > 0 
+                ? 'Your report is saved. Photos will upload in the background.' 
+                : 'Your incident has been reported successfully.'
+            );
             router.replace('/(tabs)/my-reports');
+
+            // 3. BACKGROUND TASK: Media Upload
+            if (mediaItems.length > 0) {
+                (async () => {
+                    try {
+                        const uploadedUrls: string[] = [];
+                        for (let i = 0; i < mediaItems.length; i++) {
+                            const url = await uploadMedia(mediaItems[i].uri);
+                            if (url) uploadedUrls.push(url);
+                        }
+                        
+                        if (uploadedUrls.length > 0) {
+                            await supabase
+                                .from('incidents')
+                                .update({ media_urls: uploadedUrls })
+                                .eq('id', incidentData.id);
+                        }
+                    } catch (bgError) {
+                        console.error('[Background Upload Error]:', bgError);
+                    }
+                })();
+            }
+
         } catch (error: any) {
+            console.error('Submission Error:', error);
             Alert.alert('Error', error.message || 'Failed to submit report');
         } finally {
             setIsSubmitting(false);
-            setUploading(false);
         }
     };
 
