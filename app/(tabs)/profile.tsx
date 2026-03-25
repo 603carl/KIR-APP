@@ -388,69 +388,62 @@ export default function ProfileScreen() {
                         style={styles.headerGradient}
                     >
                         <SafeAreaView edges={['top']} style={styles.headerContent}>
-                            <MotiView
-                                from={{ opacity: 0, scale: 0.9 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                transition={{ type: 'spring', damping: 15 }}
-                                style={styles.floatingGlass}
-                            >
-                                <BlurView intensity={30} tint="light" style={styles.glassContent}>
-                                    <View style={styles.profileRow}>
-                                        <TouchableOpacity
-                                            style={styles.imageContainer}
-                                            onPress={pickAvatar}
-                                            disabled={uploading}
-                                            activeOpacity={0.9}
-                                        >
-                                            {uploading || loading ? (
-                                                <View style={styles.profileImageSkeleton}>
-                                                    <ActivityIndicator color={COLORS.primary} />
-                                                </View>
-                                            ) : (
-                                                <Image
-                                                    source={profile?.avatar_url ? { uri: profile.avatar_url } : { uri: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=200&auto=format&fit=crop' }}
-                                                    style={styles.profileImage}
-                                                />
-                                            )}
-                                            <View style={styles.editBadge}>
-                                                <ShieldCheck size={12} color={COLORS.white} />
+                            <View style={styles.headerInner}>
+                                <View style={styles.profileRow}>
+                                    <TouchableOpacity
+                                        style={styles.imageContainer}
+                                        onPress={pickAvatar}
+                                        disabled={uploading}
+                                        activeOpacity={0.9}
+                                    >
+                                        {uploading || loading ? (
+                                            <View style={styles.profileImageSkeleton}>
+                                                <ActivityIndicator color={COLORS.white} />
                                             </View>
-                                        </TouchableOpacity>
+                                        ) : (
+                                            <Image
+                                                source={profile?.avatar_url ? { uri: profile.avatar_url } : { uri: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=200&auto=format&fit=crop' }}
+                                                style={styles.profileImage}
+                                            />
+                                        )}
+                                        <View style={styles.editBadge}>
+                                            <ShieldCheck size={12} color={COLORS.white} />
+                                        </View>
+                                    </TouchableOpacity>
 
-                                        <View style={styles.nameContainer}>
-                                            <Text style={styles.name}>{profile?.full_name || 'Citizen'}</Text>
-                                            <View style={styles.badgeRow}>
-                                                <View style={styles.verifiedTag}>
-                                                    <Text style={styles.verifiedText}>VERIFIED CITIZEN</Text>
-                                                </View>
-                                                <View style={styles.activeTag}>
-                                                    <Text style={styles.activeText}>{stats.topInterest.toUpperCase()}</Text>
-                                                </View>
+                                    <View style={styles.nameContainer}>
+                                        <Text style={[styles.name, { color: COLORS.white }]}>{profile?.full_name || 'Citizen'}</Text>
+                                        <View style={styles.badgeRow}>
+                                            <View style={[styles.verifiedTag, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                                                <Text style={[styles.verifiedText, { color: COLORS.white }]}>VERIFIED CITIZEN</Text>
+                                            </View>
+                                            <View style={[styles.activeTag, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                                                <Text style={[styles.activeText, { color: COLORS.white }]}>{stats.topInterest.toUpperCase()}</Text>
                                             </View>
                                         </View>
                                     </View>
+                                </View>
 
-                                    <View style={styles.statsGrid}>
-                                        <View style={styles.statBox}>
-                                            <Text style={styles.statNumber}>{stats.reports}</Text>
-                                            <Text style={styles.statLabel}>REPORTS</Text>
-                                        </View>
-                                        <View style={styles.statBorder} />
-                                        <View style={styles.statBox}>
-                                            <Text style={styles.statNumber}>{stats.resolved}</Text>
-                                            <Text style={styles.statLabel}>RESOLVED</Text>
-                                        </View>
-                                        <View style={styles.statBorder} />
-                                        <View style={styles.statBox}>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <Text style={styles.statNumber}>{stats.score}</Text>
-                                                <TrendingUp size={14} color={COLORS.success} />
-                                            </View>
-                                            <Text style={styles.statLabel}>IMPACT SCORE</Text>
-                                        </View>
+                                <View style={styles.statsGrid}>
+                                    <View style={styles.statBox}>
+                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.reports}</Text>
+                                        <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>REPORTS</Text>
                                     </View>
-                                </BlurView>
-                            </MotiView>
+                                    <View style={[styles.statBorder, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                                    <View style={styles.statBox}>
+                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.resolved}</Text>
+                                        <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>RESOLVED</Text>
+                                    </View>
+                                    <View style={[styles.statBorder, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                                    <View style={styles.statBox}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                            <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.score}</Text>
+                                            <TrendingUp size={14} color={COLORS.success} />
+                                        </View>
+                                        <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>IMPACT SCORE</Text>
+                                    </View>
+                                </View>
+                            </View>
                         </SafeAreaView>
                     </LinearGradient>
                 </View>
@@ -924,15 +917,8 @@ const styles = StyleSheet.create({
     headerContent: {
         paddingHorizontal: 20,
     },
-    floatingGlass: {
+    headerInner: {
         marginTop: 20,
-        borderRadius: 32,
-        overflow: 'hidden',
-        ...SHADOWS.premium,
-        backgroundColor: 'rgba(255, 255, 255, 0.6)',
-    },
-    glassContent: {
-        padding: 24,
     },
     profileRow: {
         flexDirection: 'row',
@@ -954,7 +940,7 @@ const styles = StyleSheet.create({
         width: 70,
         height: 70,
         borderRadius: 35,
-        backgroundColor: COLORS.primary + '10',
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -1013,7 +999,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: COLORS.white + '50',
+        backgroundColor: 'rgba(0, 0, 0, 0.15)',
         borderRadius: 20,
         padding: 16,
     },
