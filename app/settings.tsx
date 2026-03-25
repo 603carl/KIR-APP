@@ -2,6 +2,7 @@ import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { useProfile } from '@/context/ProfileContext';
 import { Stack, useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { 
     Bell, 
     ChevronRight, 
@@ -14,9 +15,12 @@ import {
     LogOut, 
     Mail, 
     MapPin,
-    Phone
+    Phone,
+    Trophy,
+    CheckCircle,
+    TrendingUp
 } from 'lucide-react-native';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     ScrollView, 
     StyleSheet, 
@@ -25,7 +29,8 @@ import {
     TouchableOpacity, 
     View, 
     Alert,
-    ActivityIndicator 
+    ActivityIndicator,
+    Platform 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -37,6 +42,26 @@ export default function SettingsScreen() {
     const [notifications, setNotifications] = useState(true);
     const [darkMode, setDarkMode] = useState(false);
     const [biometrics, setBiometrics] = useState(true);
+    const [stats, setStats] = useState({ reports: 0, resolved: 0 });
+
+    useEffect(() => {
+        const fetchStats = async () => {
+            if (!profile?.id) return;
+            try {
+                const [reportsRes, resolvedRes] = await Promise.all([
+                    supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', profile.id),
+                    supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', profile.id).in('status', ['Resolved', 'Closed', 'resolved', 'closed'])
+                ]);
+                setStats({
+                    reports: reportsRes.count || 0,
+                    resolved: resolvedRes.count || 0
+                });
+            } catch (err) {
+                console.error('Error fetching stats:', err);
+            }
+        };
+        fetchStats();
+    }, [profile?.id]);
 
     const handleLogout = async () => {
         Alert.alert(
@@ -105,44 +130,86 @@ export default function SettingsScreen() {
             <SafeAreaView style={styles.safe} edges={['bottom']}>
                 <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
                     
-                    {/* Profile Aero Ultra Header */}
-                    <MotiView 
-                        from={{ opacity: 0, translateY: 20 }}
-                        animate={{ opacity: 1, translateY: 0 }}
-                        style={styles.profileHeader}
-                    >
-                        <BlurView intensity={80} tint="light" style={styles.blurHeader}>
-                            <View style={styles.headerContent}>
-                                <View style={styles.avatarContainer}>
-                                    <View style={styles.avatar}>
-                                        <UserIcon size={44} color={COLORS.primary} />
+                    {/* Profile Aero Ultra Header - Floating Glass */}
+                    <View style={styles.headerWrapper}>
+                        <LinearGradient 
+                            colors={[COLORS.primary, '#064e3b']} 
+                            start={{ x: 0, y: 0 }} 
+                            end={{ x: 1, y: 1 }} 
+                            style={styles.headerGradient} 
+                        />
+                        
+                        <MotiView 
+                            from={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ type: 'spring', damping: 15 }}
+                            style={styles.floatingGlass}
+                        >
+                            <BlurView intensity={Platform.OS === 'ios' ? 70 : 100} tint="light" style={styles.glassContent}>
+                                <View style={styles.headerTop}>
+                                    <View style={styles.avatarWrapper}>
+                                        <View style={styles.avatarBackground}>
+                                            <UserIcon size={40} color={COLORS.primary} />
+                                        </View>
+                                        <View style={styles.premiumBadge}>
+                                            <ShieldCheck size={12} color={COLORS.white} />
+                                        </View>
                                     </View>
-                                    <View style={styles.verifyBadge}>
-                                        <ShieldCheck size={14} color={COLORS.white} />
+                                    
+                                    <View style={styles.userInfo}>
+                                        <Text style={styles.userNameText}>{profile?.full_name || 'Kenya Citizen'}</Text>
+                                        <View style={styles.badgeRow}>
+                                            <View style={styles.verifiedTag}>
+                                                <Text style={styles.verifiedText}>VERIFIED CITIZEN</Text>
+                                            </View>
+                                            <View style={styles.activeTag}>
+                                                <Text style={styles.activeText}>ACTIVE</Text>
+                                            </View>
+                                        </View>
                                     </View>
                                 </View>
-                                
-                                <View style={styles.headerInfo}>
-                                    <Text style={styles.userName}>{profile?.full_name || 'Kenya Citizen'}</Text>
-                                    <View style={styles.roleBadge}>
-                                        <Text style={styles.roleText}>{profile?.role?.toUpperCase() || 'CITIZEN'}</Text>
-                                    </View>
-                                </View>
-                            </View>
 
-                            <View style={styles.profileStats}>
-                                <View style={styles.statItem}>
-                                    <Mail size={14} color={COLORS.textMuted} />
-                                    <Text style={styles.statText} numberOfLines={1}>{profile?.email || 'No email'}</Text>
+                                <View style={styles.statsGrid}>
+                                    <View style={styles.statBox}>
+                                        <Text style={styles.statNumber}>{stats.reports}</Text>
+                                        <Text style={styles.statLabel}>REPORTS</Text>
+                                    </View>
+                                    <View style={styles.statBorder} />
+                                    <View style={styles.statBox}>
+                                        <Text style={styles.statNumber}>{stats.resolved}</Text>
+                                        <Text style={styles.statLabel}>RESOLVED</Text>
+                                    </View>
+                                    <View style={styles.statBorder} />
+                                    <View style={styles.statBox}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                            <Text style={styles.statNumber}>{profile?.accuracy_score || 0}</Text>
+                                            <TrendingUp size={14} color={COLORS.success} />
+                                        </View>
+                                        <Text style={styles.statLabel}>IMPACT SCORE</Text>
+                                    </View>
                                 </View>
-                                <View style={styles.statDivider} />
-                                <View style={styles.statItem}>
-                                    <MapPin size={14} color={COLORS.textMuted} />
-                                    <Text style={styles.statText}>{profile?.county || 'Kenya'}</Text>
+                            </BlurView>
+                        </MotiView>
+                    </View>
+
+                    <Text style={styles.sectionHeader}>Civic Achievements</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.achievementScroll}>
+                        {[
+                            { title: 'First Responder', icon: Trophy, status: 'LOCKED', color: '#94a3b8' },
+                            { title: 'Action Hero', icon: CheckCircle, status: 'EARNED', color: COLORS.success },
+                            { title: 'Verifier', icon: Shield, status: 'LOCKED', color: '#94a3b8' }
+                        ].map((item, i) => (
+                            <View key={i} style={styles.achievementCard}>
+                                <View style={[styles.achievementIcon, { backgroundColor: item.color + '15' }]}>
+                                    <item.icon size={24} color={item.color} />
+                                </View>
+                                <Text style={styles.achievementTitle}>{item.title}</Text>
+                                <View style={[styles.statusBadge, { backgroundColor: item.color + '10' }]}>
+                                    <Text style={[styles.statusText, { color: item.color }]}>{item.status}</Text>
                                 </View>
                             </View>
-                        </BlurView>
-                    </MotiView>
+                        ))}
+                    </ScrollView>
 
                     <Text style={styles.sectionHeader}>Contact Information</Text>
                     <View style={styles.card}>
@@ -209,101 +276,170 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
     safe: { flex: 1 },
-    scroll: { padding: SPACING.lg },
+    scroll: { paddingBottom: 100 },
     
-    // Profile Header Aero Ultra
-    profileHeader: {
+    // Aero Ultra Header
+    headerWrapper: {
+        height: 200,
+        marginBottom: 80,
+    },
+    headerGradient: {
+        height: 160,
+        borderBottomLeftRadius: 40,
+        borderBottomRightRadius: 40,
+    },
+    floatingGlass: {
+        position: 'absolute',
+        top: 60,
+        left: 20,
+        right: 20,
         borderRadius: 32,
-        marginBottom: 32,
         overflow: 'hidden',
         ...SHADOWS.premium,
-        backgroundColor: COLORS.white + '80',
+        backgroundColor: COLORS.white + '90',
         borderWidth: 1,
         borderColor: COLORS.white,
     },
-    blurHeader: {
+    glassContent: {
         padding: 24,
     },
-    headerContent: {
+    headerTop: {
         flexDirection: 'row',
         alignItems: 'center',
         marginBottom: 24,
     },
-    avatarContainer: {
+    avatarWrapper: {
         position: 'relative',
     },
-    avatar: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: COLORS.primary + '15',
+    avatarBackground: {
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        backgroundColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 3,
-        borderColor: COLORS.white,
+        ...SHADOWS.soft,
     },
-    verifyBadge: {
+    premiumBadge: {
         position: 'absolute',
-        bottom: 0,
-        right: 0,
+        bottom: -2,
+        right: -2,
         backgroundColor: COLORS.primary,
-        width: 24,
-        height: 24,
-        borderRadius: 12,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 2,
         borderColor: COLORS.white,
     },
-    headerInfo: {
-        marginLeft: 20,
+    userInfo: {
+        marginLeft: 16,
         flex: 1,
     },
-    userName: { 
-        fontSize: 22, 
-        fontWeight: '900', 
+    userNameText: {
+        fontSize: 22,
+        fontWeight: '900',
         color: COLORS.black,
-        marginBottom: 4,
+        marginBottom: 6,
     },
-    roleBadge: {
-        backgroundColor: COLORS.primary + '20',
-        paddingHorizontal: 10,
+    badgeRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    verifiedTag: {
+        backgroundColor: COLORS.primary + '15',
+        paddingHorizontal: 8,
         paddingVertical: 3,
         borderRadius: 6,
-        alignSelf: 'flex-start',
     },
-    roleText: {
-        fontSize: 10,
+    verifiedText: {
+        fontSize: 9,
         fontWeight: '900',
         color: COLORS.primary,
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
-    profileStats: {
+    activeTag: {
+        backgroundColor: COLORS.success + '15',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 6,
+    },
+    activeText: {
+        fontSize: 9,
+        fontWeight: '900',
+        color: COLORS.success,
+        letterSpacing: 0.5,
+    },
+    statsGrid: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.white + '60',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        justifyContent: 'space-between',
+        backgroundColor: COLORS.white + '50',
         borderRadius: 20,
-        width: '100%',
+        padding: 16,
     },
-    statItem: {
+    statBox: {
         flex: 1,
-        flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        justifyContent: 'center',
     },
-    statText: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: COLORS.textSecondary,
+    statNumber: {
+        fontSize: 18,
+        fontWeight: '900',
+        color: COLORS.black,
+        marginBottom: 2,
     },
-    statDivider: {
+    statLabel: {
+        fontSize: 9,
+        fontWeight: '800',
+        color: COLORS.textMuted,
+        letterSpacing: 0.5,
+    },
+    statBorder: {
         width: 1,
-        height: 16,
+        height: 24,
         backgroundColor: COLORS.border,
-        marginHorizontal: 8,
+    },
+
+    achievementScroll: {
+        paddingLeft: 20,
+        paddingRight: 20,
+        gap: 16,
+        marginBottom: 32,
+    },
+    achievementCard: {
+        width: 140,
+        backgroundColor: COLORS.white,
+        borderRadius: 24,
+        padding: 20,
+        alignItems: 'center',
+        ...SHADOWS.soft,
+        borderWidth: 1,
+        borderColor: COLORS.white,
+    },
+    achievementIcon: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    achievementTitle: {
+        fontSize: 13,
+        fontWeight: '800',
+        color: COLORS.black,
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    statusBadge: {
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    statusText: {
+        fontSize: 9,
+        fontWeight: '900',
     },
 
     sectionHeader: { 

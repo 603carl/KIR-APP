@@ -11,6 +11,7 @@ export interface Profile {
   role?: string;
   avatar_url?: string;
   privacy_settings?: any;
+  accuracy_score?: number;
 }
 
 interface ProfileContextType {

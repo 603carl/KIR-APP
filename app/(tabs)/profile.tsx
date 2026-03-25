@@ -18,8 +18,10 @@ import {
     Star,
     Trash2,
     TrendingUp,
-    User
+    User,
+    ShieldCheck
 } from 'lucide-react-native';
+import { BlurView } from 'expo-blur';
 import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
@@ -377,10 +379,10 @@ export default function ProfileScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ backgroundColor: COLORS.background }}
             >
-                {/* Profile Header Block */}
-                <View style={styles.headerBlock}>
+                {/* Profile Aero Ultra Header - Floating Glass */}
+                <View style={[styles.headerWrapper, { height: 220 + insets.top }]}>
                     <LinearGradient
-                        colors={['#006B3F', '#004D2C']}
+                        colors={[COLORS.primary, '#004D2C']}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
                         style={styles.headerGradient}
@@ -389,62 +391,65 @@ export default function ProfileScreen() {
                             <MotiView
                                 from={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                transition={{ type: 'spring', delay: 100 }}
-                                style={styles.profileRow}
+                                transition={{ type: 'spring', damping: 15 }}
+                                style={styles.floatingGlass}
                             >
-                                <TouchableOpacity
-                                    style={styles.imageContainer}
-                                    onPress={pickAvatar}
-                                    disabled={uploading}
-                                    activeOpacity={0.9}
-                                >
-                                    {uploading || loading ? (
-                                        <View style={styles.profileImageSkeleton}>
-                                            <ActivityIndicator color={COLORS.white} />
+                                <BlurView intensity={Platform.OS === 'ios' ? 70 : 100} tint="light" style={styles.glassContent}>
+                                    <View style={styles.profileRow}>
+                                        <TouchableOpacity
+                                            style={styles.imageContainer}
+                                            onPress={pickAvatar}
+                                            disabled={uploading}
+                                            activeOpacity={0.9}
+                                        >
+                                            {uploading || loading ? (
+                                                <View style={styles.profileImageSkeleton}>
+                                                    <ActivityIndicator color={COLORS.primary} />
+                                                </View>
+                                            ) : (
+                                                <Image
+                                                    source={profile?.avatar_url ? { uri: profile.avatar_url } : { uri: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=200&auto=format&fit=crop' }}
+                                                    style={styles.profileImage}
+                                                />
+                                            )}
+                                            <View style={styles.editBadge}>
+                                                <ShieldCheck size={12} color={COLORS.white} />
+                                            </View>
+                                        </TouchableOpacity>
+
+                                        <View style={styles.nameContainer}>
+                                            <Text style={styles.name}>{profile?.full_name || 'Citizen'}</Text>
+                                            <View style={styles.badgeRow}>
+                                                <View style={styles.verifiedTag}>
+                                                    <Text style={styles.verifiedText}>VERIFIED CITIZEN</Text>
+                                                </View>
+                                                <View style={styles.activeTag}>
+                                                    <Text style={styles.activeText}>{stats.topInterest.toUpperCase()}</Text>
+                                                </View>
+                                            </View>
                                         </View>
-                                    ) : (
-                                        <Image
-                                            source={profile?.avatar_url ? { uri: profile.avatar_url } : { uri: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=200&auto=format&fit=crop' }}
-                                            style={styles.profileImage}
-                                        />
-                                    )}
-                                    <View style={styles.editBadge}>
-                                        <Star size={12} color={COLORS.white} fill={COLORS.white} />
                                     </View>
-                                </TouchableOpacity>
 
-                                <View style={styles.nameContainer}>
-                                    <Text style={styles.name}>{profile?.full_name || 'Citizen'}</Text>
-                                    <View style={styles.rankBadge}>
-                                        <Text style={styles.rankText}>Verified Citizen • {stats.topInterest}</Text>
+                                    <View style={styles.statsGrid}>
+                                        <View style={styles.statBox}>
+                                            <Text style={styles.statNumber}>{stats.reports}</Text>
+                                            <Text style={styles.statLabel}>REPORTS</Text>
+                                        </View>
+                                        <View style={styles.statBorder} />
+                                        <View style={styles.statBox}>
+                                            <Text style={styles.statNumber}>{stats.resolved}</Text>
+                                            <Text style={styles.statLabel}>RESOLVED</Text>
+                                        </View>
+                                        <View style={styles.statBorder} />
+                                        <View style={styles.statBox}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                <Text style={styles.statNumber}>{stats.score}</Text>
+                                                <TrendingUp size={14} color={COLORS.success} />
+                                            </View>
+                                            <Text style={styles.statLabel}>IMPACT SCORE</Text>
+                                        </View>
                                     </View>
-                                </View>
-                            </MotiView>
-
-                            {/* Floating Stats Card - Layered Depth */}
-                            <MotiView
-                                from={{ opacity: 0, translateY: 40 }}
-                                animate={{ opacity: 1, translateY: 0 }}
-                                transition={{ type: 'spring', delay: 300 }}
-                                style={styles.statsCard}
-                            >
-                                <View style={styles.statBox}>
-                                    <Text style={styles.statNumber}>{stats.reports}</Text>
-                                    <Text style={styles.statLabel}>Reports</Text>
-                                </View>
-                                <View style={styles.statDivider} />
-                                <View style={styles.statBox}>
-                                    <Text style={styles.statNumber}>{stats.resolved}</Text>
-                                    <Text style={styles.statLabel}>Resolved</Text>
-                                </View>
-                                <View style={styles.statDivider} />
-                                <View style={styles.statBox}>
-                                    <View style={styles.scoreRow}>
-                                        <Text style={styles.statNumber}>{stats.score}</Text>
-                                        <TrendingUp size={12} color={COLORS.success} />
-                                    </View>
-                                    <Text style={styles.statLabel}>Impact Score</Text>
-                                </View>
+                                </BlurView>
                             </MotiView>
                         </SafeAreaView>
                     </LinearGradient>
@@ -905,43 +910,50 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
     row: { flexDirection: 'row', alignItems: 'center' },
-    headerBlock: {
-        marginBottom: 10,
+    headerWrapper: {
+        marginBottom: 60,
     },
     headerGradient: {
-        borderBottomLeftRadius: 60,
-        borderBottomRightRadius: 60,
-        paddingBottom: 10,
+        height: '100%',
+        borderBottomLeftRadius: 40,
+        borderBottomRightRadius: 40,
     },
     headerContent: {
-        paddingHorizontal: 24,
-        paddingBottom: 5,
+        paddingHorizontal: 20,
+    },
+    floatingGlass: {
+        marginTop: 20,
+        borderRadius: 32,
+        overflow: 'hidden',
+        ...SHADOWS.premium,
+        backgroundColor: COLORS.white + '95',
+        borderWidth: 1,
+        borderColor: COLORS.white,
+    },
+    glassContent: {
+        padding: 24,
     },
     profileRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 20,
+        marginBottom: 24,
     },
     imageContainer: {
-        width: 86,
-        height: 86,
-        borderRadius: 43,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        padding: 4,
-        ...SHADOWS.medium,
+        position: 'relative',
     },
     profileImage: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 43,
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        backgroundColor: COLORS.white,
         borderWidth: 2,
         borderColor: COLORS.white,
     },
     profileImageSkeleton: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 43,
-        backgroundColor: 'rgba(255,255,255,0.2)',
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        backgroundColor: COLORS.primary + '10',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -949,49 +961,60 @@ const styles = StyleSheet.create({
         position: 'absolute',
         bottom: -2,
         right: -2,
-        backgroundColor: COLORS.gold,
-        width: 24,
-        height: 24,
-        borderRadius: 12,
+        backgroundColor: COLORS.primary,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 2,
         borderColor: COLORS.white,
     },
     nameContainer: {
-        marginLeft: 20,
+        marginLeft: 16,
         flex: 1,
     },
     name: {
         fontSize: 24,
         fontWeight: '900',
         color: COLORS.white,
-        letterSpacing: -0.5,
+        marginBottom: 4,
     },
-    rankBadge: {
-        backgroundColor: 'rgba(255,255,255,0.12)',
-        alignSelf: 'flex-start',
-        paddingHorizontal: 12,
-        paddingVertical: 5,
-        borderRadius: 12,
-        marginTop: 6,
-    },
-    rankText: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: 'rgba(255,255,255,0.95)',
-    },
-    statsCard: {
+    badgeRow: {
         flexDirection: 'row',
-        backgroundColor: 'rgba(0,0,0,0.18)',
-        marginHorizontal: 24,
-        marginTop: 10,
-        borderRadius: 28,
-        padding: 24,
-        justifyContent: 'space-around',
+        gap: 8,
+    },
+    verifiedTag: {
+        backgroundColor: COLORS.primary + '15',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 6,
+    },
+    verifiedText: {
+        fontSize: 9,
+        fontWeight: '900',
+        color: COLORS.primary,
+        letterSpacing: 0.5,
+    },
+    activeTag: {
+        backgroundColor: COLORS.success + '15',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 6,
+    },
+    activeText: {
+        fontSize: 9,
+        fontWeight: '900',
+        color: COLORS.success,
+        letterSpacing: 0.5,
+    },
+    statsGrid: {
+        flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.05)',
+        justifyContent: 'space-between',
+        backgroundColor: COLORS.white + '50',
+        borderRadius: 20,
+        padding: 16,
     },
     statBox: {
         alignItems: 'center',
@@ -1010,10 +1033,10 @@ const styles = StyleSheet.create({
         textTransform: 'uppercase',
         letterSpacing: 0.5,
     },
-    statDivider: {
+    statBorder: {
         width: 1,
-        height: 30,
-        backgroundColor: 'rgba(255,255,255,0.15)',
+        height: 24,
+        backgroundColor: COLORS.border,
     },
     scoreRow: {
         flexDirection: 'row',

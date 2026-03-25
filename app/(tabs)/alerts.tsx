@@ -50,6 +50,16 @@ interface Notification {
     payload?: any;
 }
 
+const getIncidentIdFromPayload = (payload: any, body: string, id: string) => {
+    if (!payload) {
+        // Fallback: search body for UUID
+        const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+        const match = body.match(uuidRegex);
+        return match ? match[0] : null;
+    }
+    return payload.incidentId || payload.incident_id || payload.id || null;
+};
+
 // Ultra-Performance Notification Row using 100% Native Driver
 const SwipeableNotification = React.memo(({
     notification,
@@ -149,7 +159,7 @@ const SwipeableNotification = React.memo(({
                         <View style={styles.alertContent}>
                             <View style={styles.alertHeader}>
                                 <Text style={[styles.alertType, { color }]}>
-                                    {notification.type.toUpperCase()}
+                                    {notification.type.replace('_', ' ').toUpperCase()}
                                 </Text>
                                 <Text style={styles.alertTime}>{getTimeAgo(notification.created_at)}</Text>
                             </View>
@@ -161,6 +171,16 @@ const SwipeableNotification = React.memo(({
                             
                             <Text style={styles.alertMessage} numberOfLines={2}>{notification.body}</Text>
                         </View>
+
+                        <TouchableOpacity 
+                            style={styles.directDeleteBtn}
+                            onPress={(e) => {
+                                e.stopPropagation();
+                                onDelete();
+                            }}
+                        >
+                            <Trash2 size={18} color={COLORS.textMuted} opacity={0.5} />
+                        </TouchableOpacity>
                     </BlurView>
                 </TouchableOpacity>
             </Animated.View>
@@ -264,10 +284,11 @@ export default function AlertsScreen() {
     const getColor = (type: string) => {
         const t = type.toLowerCase();
         if (t.includes('emergency') || t.includes('critical')) return COLORS.error;
-        if (t.includes('water') || t.includes('road') || t.includes('power')) return COLORS.primary;
-        if (t.includes('success')) return COLORS.success;
+        if (t.includes('verified') || t.includes('status_update')) return COLORS.primary;
+        if (t.includes('resolved') || t.includes('success')) return COLORS.success;
+        if (t.includes('assigned') || t.includes('team')) return '#6366f1'; // Indigo for teams
         if (t.includes('warning')) return COLORS.warning;
-        return COLORS.info;
+        return COLORS.textMuted;
     };
 
     const getTimeAgo = (date: string) => {
@@ -283,7 +304,14 @@ export default function AlertsScreen() {
     const renderItem = useCallback(({ item }: { item: Notification }) => (
         <SwipeableNotification
             notification={item}
-            onPress={() => router.push(`/incident/${item.payload?.incidentId || item.id}` as any)}
+            onPress={() => {
+                const targetId = getIncidentIdFromPayload(item.payload, item.body, item.id);
+                if (targetId) {
+                    router.push(`/incident/${targetId}` as any);
+                } else {
+                    Alert.alert("Notice", "This notification doesn't have a linked incident report.");
+                }
+            }}
             onDelete={() => deleteNotification(item.id)}
             getIcon={getIcon}
             getColor={getColor}
@@ -436,4 +464,11 @@ const styles = StyleSheet.create({
     },
     emptyTitle: { fontSize: 20, fontWeight: '800', color: COLORS.black, marginBottom: 8 },
     emptyText: { fontSize: 14, color: COLORS.textMuted, textAlign: 'center', lineHeight: 22 },
+    directDeleteBtn: {
+        width: 40,
+        height: 40,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
+    },
 });
