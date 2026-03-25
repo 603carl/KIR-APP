@@ -147,7 +147,7 @@ export default function ReportScreen() {
                     {
                         user_id: user.id,
                         title: getCategoryTitle(),
-                        category: selectedCat,
+                        category: getCategoryTitle().toLowerCase(), // Match Watch Command enum (water, roads, etc.)
                         description: description.trim(),
                         location_name: locationMethod === 'gps' ? locationName : landmarkName,
                         lat: coords.lat || -1.2921,
