@@ -1,5 +1,6 @@
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
+import { useProfile } from '@/context/ProfileContext';
 import { Stack, useRouter } from 'expo-router';
 import { 
     Bell, 
@@ -15,7 +16,7 @@ import {
     MapPin,
     Phone
 } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { 
     ScrollView, 
     StyleSheet, 
@@ -23,57 +24,19 @@ import {
     Text, 
     TouchableOpacity, 
     View, 
-    Image, 
     Alert,
     ActivityIndicator 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import { MotiView } from 'moti';
-
-interface Profile {
-    full_name: string;
-    email?: string;
-    phone?: string;
-    county?: string;
-    role?: string;
-    avatar_url?: string;
-}
 
 export default function SettingsScreen() {
     const router = useRouter();
-    const [profile, setProfile] = useState<Profile | null>(null);
-    const [loading, setLoading] = useState(true);
+    const { profile, loading: profileLoading } = useProfile();
     const [notifications, setNotifications] = useState(true);
     const [darkMode, setDarkMode] = useState(false);
     const [biometrics, setBiometrics] = useState(true);
-
-    useEffect(() => {
-        fetchProfile();
-    }, []);
-
-    const fetchProfile = async () => {
-        try {
-            setLoading(true);
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-
-            const { data, error } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', user.id)
-                .single();
-
-            if (error) throw error;
-            setProfile({
-                ...data,
-                email: user.email
-            });
-        } catch (error) {
-            console.error('Error fetching profile:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const handleLogout = async () => {
         Alert.alert(
@@ -120,7 +83,8 @@ export default function SettingsScreen() {
         </TouchableOpacity>
     );
 
-    if (loading) {
+    // If profile is still loading on first-ever mount
+    if (profileLoading && !profile) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
                 <ActivityIndicator size="large" color={COLORS.primary} />
@@ -141,37 +105,43 @@ export default function SettingsScreen() {
             <SafeAreaView style={styles.safe} edges={['bottom']}>
                 <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
                     
-                    {/* Profile Aero Header */}
+                    {/* Profile Aero Ultra Header */}
                     <MotiView 
-                        from={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
+                        from={{ opacity: 0, translateY: 20 }}
+                        animate={{ opacity: 1, translateY: 0 }}
                         style={styles.profileHeader}
                     >
-                        <View style={styles.avatarContainer}>
-                            <View style={styles.avatar}>
-                                <UserIcon size={40} color={COLORS.primary} />
+                        <BlurView intensity={80} tint="light" style={styles.blurHeader}>
+                            <View style={styles.headerContent}>
+                                <View style={styles.avatarContainer}>
+                                    <View style={styles.avatar}>
+                                        <UserIcon size={44} color={COLORS.primary} />
+                                    </View>
+                                    <View style={styles.verifyBadge}>
+                                        <ShieldCheck size={14} color={COLORS.white} />
+                                    </View>
+                                </View>
+                                
+                                <View style={styles.headerInfo}>
+                                    <Text style={styles.userName}>{profile?.full_name || 'Kenya Citizen'}</Text>
+                                    <View style={styles.roleBadge}>
+                                        <Text style={styles.roleText}>{profile?.role?.toUpperCase() || 'CITIZEN'}</Text>
+                                    </View>
+                                </View>
                             </View>
-                            <View style={styles.verifyBadge}>
-                                <ShieldCheck size={14} color={COLORS.white} />
-                            </View>
-                        </View>
-                        
-                        <Text style={styles.userName}>{profile?.full_name || 'Kenya Citizen'}</Text>
-                        <View style={styles.roleBadge}>
-                            <Text style={styles.roleText}>{profile?.role?.toUpperCase() || 'CITIZEN'}</Text>
-                        </View>
 
-                        <View style={styles.profileStats}>
-                            <View style={styles.statItem}>
-                                <Mail size={14} color={COLORS.textMuted} />
-                                <Text style={styles.statText} numberOfLines={1}>{profile?.email || 'No email'}</Text>
+                            <View style={styles.profileStats}>
+                                <View style={styles.statItem}>
+                                    <Mail size={14} color={COLORS.textMuted} />
+                                    <Text style={styles.statText} numberOfLines={1}>{profile?.email || 'No email'}</Text>
+                                </View>
+                                <View style={styles.statDivider} />
+                                <View style={styles.statItem}>
+                                    <MapPin size={14} color={COLORS.textMuted} />
+                                    <Text style={styles.statText}>{profile?.county || 'Kenya'}</Text>
+                                </View>
                             </View>
-                            <View style={styles.statDivider} />
-                            <View style={styles.statItem}>
-                                <MapPin size={14} color={COLORS.textMuted} />
-                                <Text style={styles.statText}>{profile?.county || 'Kenya'}</Text>
-                            </View>
-                        </View>
+                        </BlurView>
                     </MotiView>
 
                     <Text style={styles.sectionHeader}>Contact Information</Text>
@@ -241,56 +211,66 @@ const styles = StyleSheet.create({
     safe: { flex: 1 },
     scroll: { padding: SPACING.lg },
     
-    // Profile Header Aero
+    // Profile Header Aero Ultra
     profileHeader: {
-        backgroundColor: COLORS.white,
         borderRadius: 32,
-        padding: 32,
-        alignItems: 'center',
         marginBottom: 32,
+        overflow: 'hidden',
         ...SHADOWS.premium,
+        backgroundColor: COLORS.white + '80',
         borderWidth: 1,
-        borderColor: COLORS.white + '80',
+        borderColor: COLORS.white,
+    },
+    blurHeader: {
+        padding: 24,
+    },
+    headerContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 24,
     },
     avatarContainer: {
-        marginBottom: 16,
         position: 'relative',
     },
     avatar: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
-        backgroundColor: COLORS.primary + '10',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 4,
-        borderColor: COLORS.background,
-    },
-    verifyBadge: {
-        position: 'absolute',
-        bottom: 4,
-        right: 4,
-        backgroundColor: COLORS.primary,
-        width: 28,
-        height: 28,
-        borderRadius: 14,
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: COLORS.primary + '15',
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 3,
         borderColor: COLORS.white,
     },
+    verifyBadge: {
+        position: 'absolute',
+        bottom: 0,
+        right: 0,
+        backgroundColor: COLORS.primary,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    headerInfo: {
+        marginLeft: 20,
+        flex: 1,
+    },
     userName: { 
-        fontSize: 24, 
+        fontSize: 22, 
         fontWeight: '900', 
         color: COLORS.black,
-        marginBottom: 8,
+        marginBottom: 4,
     },
     roleBadge: {
-        backgroundColor: COLORS.primary + '15',
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 8,
-        marginBottom: 20,
+        backgroundColor: COLORS.primary + '20',
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 6,
+        alignSelf: 'flex-start',
     },
     roleText: {
         fontSize: 10,
@@ -301,7 +281,7 @@ const styles = StyleSheet.create({
     profileStats: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.background,
+        backgroundColor: COLORS.white + '60',
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderRadius: 20,
@@ -316,7 +296,7 @@ const styles = StyleSheet.create({
     },
     statText: {
         fontSize: 12,
-        fontWeight: '600',
+        fontWeight: '700',
         color: COLORS.textSecondary,
     },
     statDivider: {

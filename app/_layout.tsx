@@ -10,6 +10,7 @@ import { EmergencyBroadcastOverlay, type BroadcastAlert } from '@/components/bro
 import { useColorScheme } from '@/components/useColorScheme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { supabase } from '@/lib/supabase';
+import { ProfileProvider } from '@/context/ProfileContext';
 import { useAssets } from 'expo-asset';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
@@ -148,32 +149,12 @@ export default function RootLayout() {
                     setPendingRedirect('/(tabs)');
                 }
 
-                // 4. Profile, Biometric Lock & Role Check
+                // 4. Biometric Lock & Android 14+ Ready Check
                 if (session?.user) {
-                    setTimeout(async () => {
-                        try {
-                            const { data: profile } = await supabase
-                                .from('profiles')
-                                .select('role, privacy_settings')
-                                .eq('id', session.user.id)
-                                .single();
-
-                            if (profile) {
-                                userRoleRef.current = profile.role || 'reporter';
-
-                                if (profile.privacy_settings?.auto_sign_out_timeout !== undefined) {
-                                    autoSignOutTimeout.current = profile.privacy_settings.auto_sign_out_timeout;
-                                }
-                            }
-
-                            // Android 14+: Check FSI permission and prompt if needed
-                            if (Platform.OS === 'android' && Platform.Version >= 34) {
-                                promptForFSIPermission();
-                            }
-                        } catch (bioError) {
-                            console.log('Biometric error:', bioError);
-                        }
-                    }, 500);
+                    // Android 14+: Check FSI permission and prompt if needed
+                    if (Platform.OS === 'android' && Platform.Version >= 34) {
+                        promptForFSIPermission();
+                    }
                 }
 
             } catch (e) {
@@ -315,27 +296,29 @@ export default function RootLayout() {
 
     return (
         <SafeAreaProvider>
-            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-                <Stack screenOptions={{ headerShown: false }}>
-                    <Stack.Screen name="onboarding" />
-                    <Stack.Screen name="auth/login" />
-                    <Stack.Screen name="auth/signup" />
-                    <Stack.Screen name="(tabs)" />
-                    <Stack.Screen name="incident/[id]" options={{ presentation: 'card' }} />
-                    <Stack.Screen name="settings" options={{ presentation: 'card', headerShown: true }} />
-                    <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
-                    <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-                </Stack>
-                <EmergencyBroadcastOverlay
-                    alert={activeBroadcast}
-                    onAcknowledge={async (id) => {
-                        const updatedIds = [...acknowledgedIds, id];
-                        setAcknowledgedIds(updatedIds);
-                        await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
-                        setActiveBroadcast(null);
-                    }}
-                />
-            </ThemeProvider>
+            <ProfileProvider>
+                <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                    <Stack screenOptions={{ headerShown: false }}>
+                        <Stack.Screen name="onboarding" />
+                        <Stack.Screen name="auth/login" />
+                        <Stack.Screen name="auth/signup" />
+                        <Stack.Screen name="(tabs)" />
+                        <Stack.Screen name="incident/[id]" options={{ presentation: 'card' }} />
+                        <Stack.Screen name="settings" options={{ presentation: 'card', headerShown: true }} />
+                        <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
+                        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+                    </Stack>
+                    <EmergencyBroadcastOverlay
+                        alert={activeBroadcast}
+                        onAcknowledge={async (id) => {
+                            const updatedIds = [...acknowledgedIds, id];
+                            setAcknowledgedIds(updatedIds);
+                            await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify(updatedIds));
+                            setActiveBroadcast(null);
+                        }}
+                    />
+                </ThemeProvider>
+            </ProfileProvider>
         </SafeAreaProvider>
     );
 }
