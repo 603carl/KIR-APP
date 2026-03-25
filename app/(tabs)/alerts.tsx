@@ -7,10 +7,13 @@ import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import {
     AlertTriangle,
+    Car,
     CheckCircle2,
+    Droplet,
     Info,
     ShieldAlert,
-    Trash2
+    Trash2,
+    Zap
 } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -18,6 +21,8 @@ import {
     Alert,
     Animated,
     Dimensions,
+    FlatList,
+    LayoutAnimation,
     PanResponder,
     RefreshControl,
     ScrollView,
@@ -44,12 +49,11 @@ interface Notification {
     isBroadcast?: boolean;
 }
 
-// Swipeable Notification Item Component
-const SwipeableNotification = ({
+// Memoized Swipeable Notification Item Component for Zero-Lag Performance
+const SwipeableNotification = React.memo(({
     notification,
     onPress,
     onDelete,
-    index,
     getIcon,
     getColor,
     getTimeAgo
@@ -57,52 +61,45 @@ const SwipeableNotification = ({
     notification: Notification;
     onPress: () => void;
     onDelete: () => void;
-    index: number;
     getIcon: (type: string) => any;
     getColor: (type: string) => string;
     getTimeAgo: (date: string) => string;
 }) => {
     const translateX = useRef(new Animated.Value(0)).current;
-    const itemHeight = useRef(new Animated.Value(1)).current;
-    const [isDeleting, setIsDeleting] = useState(false);
+    const opacity = useRef(new Animated.Value(1)).current;
+    const height = useRef(new Animated.Value(1)).current;
 
     const panResponder = useRef(
         PanResponder.create({
             onMoveShouldSetPanResponder: (_, gestureState) => {
-                return Math.abs(gestureState.dx) > 10 && Math.abs(gestureState.dy) < 20;
+                return Math.abs(gestureState.dx) > 10 && Math.abs(gestureState.dy) < 10;
             },
             onPanResponderMove: (_, gestureState) => {
-                // Allow swiping in both directions
                 translateX.setValue(gestureState.dx);
             },
             onPanResponderRelease: (_, gestureState) => {
-                // Check if swipe is far enough in either direction
                 if (Math.abs(gestureState.dx) > SWIPE_THRESHOLD) {
-                    // Swipe out animation
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                     const direction = gestureState.dx > 0 ? SCREEN_WIDTH : -SCREEN_WIDTH;
-
+                    
                     Animated.parallel([
                         Animated.timing(translateX, {
                             toValue: direction,
-                            duration: 200,
+                            duration: 150,
                             useNativeDriver: true
                         }),
-                        Animated.timing(itemHeight, {
+                        Animated.timing(opacity, {
                             toValue: 0,
-                            duration: 200,
-                            useNativeDriver: false
+                            duration: 150,
+                            useNativeDriver: true
                         })
                     ]).start(() => {
-                        setIsDeleting(true);
                         onDelete();
                     });
                 } else {
-                    // Snap back
                     Animated.spring(translateX, {
                         toValue: 0,
                         useNativeDriver: true,
-                        bounciness: 8
+                        friction: 6
                     }).start();
                 }
             }
@@ -112,65 +109,50 @@ const SwipeableNotification = ({
     const Icon = getIcon(notification.type);
     const color = getColor(notification.type);
 
-    if (isDeleting) return null;
-
     return (
-        <Animated.View style={{ transform: [{ scaleY: itemHeight }] }}>
-            {/* Delete background */}
+        <Animated.View style={[styles.alertWrapper, { opacity }]}>
             <View style={styles.deleteBackground}>
-                <View style={styles.deleteLeft}>
-                    <Trash2 size={24} color={COLORS.white} />
-                    <Text style={styles.deleteText}>Delete</Text>
-                </View>
-                <View style={styles.deleteRight}>
-                    <Text style={styles.deleteText}>Delete</Text>
-                    <Trash2 size={24} color={COLORS.white} />
-                </View>
+                <Trash2 size={24} color={COLORS.white} />
             </View>
-
-            {/* Notification card */}
             <Animated.View
-                style={{ transform: [{ translateX }] }}
+                style={[styles.alertCardContainer, { transform: [{ translateX }] }]}
                 {...panResponder.panHandlers}
             >
-                <TouchableOpacity activeOpacity={0.9} onPress={onPress}>
-                    <MotiView
-                        from={{ opacity: 0, translateY: 20 }}
-                        animate={{ opacity: 1, translateY: 0 }}
-                        transition={{ delay: Math.min(index * 80, 400) }}
-                        style={[
-                            styles.alertCard,
-                            !notification.is_read && styles.unreadCard,
-                            { borderLeftColor: color }
-                        ]}
-                    >
-                        <View style={[styles.iconBox, { backgroundColor: color + '15' }]}>
-                            <Icon size={24} color={color} />
-                        </View>
+                <TouchableOpacity 
+                    activeOpacity={0.7} 
+                    onPress={onPress}
+                    style={[
+                        styles.alertCard,
+                        !notification.is_read && styles.unreadCard,
+                        { borderLeftColor: color }
+                    ]}
+                >
+                    <View style={[styles.iconBox, { backgroundColor: color + '12' }]}>
+                        <Icon size={24} color={color} />
+                    </View>
 
-                        <View style={styles.alertContent}>
-                            <View style={styles.alertHeader}>
-                                <View style={styles.typeRow}>
-                                    <Text style={[styles.alertType, { color }]}>
-                                        {notification.type.toUpperCase()}
-                                    </Text>
-                                    {!notification.is_read && (
-                                        <View style={[styles.unreadBadge, { backgroundColor: color }]}>
-                                            <Text style={styles.unreadBadgeText}>NEW</Text>
-                                        </View>
-                                    )}
-                                </View>
-                                <Text style={styles.alertTime}>{getTimeAgo(notification.created_at)}</Text>
+                    <View style={styles.alertContent}>
+                        <View style={styles.alertHeader}>
+                            <View style={styles.typeRow}>
+                                <Text style={[styles.alertType, { color }]}>
+                                    {notification.type.toUpperCase()}
+                                </Text>
+                                {!notification.is_read && (
+                                    <View style={[styles.unreadBadge, { backgroundColor: color }]}>
+                                        <Text style={styles.unreadBadgeText}>NEW</Text>
+                                    </View>
+                                )}
                             </View>
-                            <Text style={styles.alertTitle} numberOfLines={1}>{notification.title}</Text>
-                            <Text style={styles.alertMessage} numberOfLines={2}>{notification.body}</Text>
+                            <Text style={styles.alertTime}>{getTimeAgo(notification.created_at)}</Text>
                         </View>
-                    </MotiView>
+                        <Text style={styles.alertTitle} numberOfLines={1}>{notification.title}</Text>
+                        <Text style={styles.alertMessage} numberOfLines={2}>{notification.body}</Text>
+                    </View>
                 </TouchableOpacity>
             </Animated.View>
         </Animated.View>
     );
-};
+});
 
 export default function AlertsScreen() {
     const router = useRouter();
@@ -337,7 +319,10 @@ export default function AlertsScreen() {
             }
 
             // 4. Update UI state
-            setNotifications(prev => prev.filter(n => n.id !== id));
+            // Optimistic rendering: remove from UI immediately
+            const updated = notifications.filter(n => n.id !== id);
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setNotifications(updated);
 
             // 5. Sync count across app
             supabase.channel('local-sync').send({
@@ -386,6 +371,7 @@ export default function AlertsScreen() {
             setAcknowledgedIds(combinedIds);
 
             // 3. Optimistic UI update
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
 
             // 4. Sync globally
@@ -402,25 +388,24 @@ export default function AlertsScreen() {
     };
 
     const getIcon = (type: string) => {
-        switch (type.toLowerCase()) {
-            case 'item_critical':
-            case 'emergency': return ShieldAlert;
-            case 'success': return CheckCircle2;
-            case 'warning': return AlertTriangle;
-            case 'info':
-            default: return Info;
-        }
+        const t = type.toLowerCase();
+        if (t.includes('emergency') || t.includes('critical')) return ShieldAlert;
+        if (t.includes('water')) return Droplet;
+        if (t.includes('road')) return Car;
+        if (t.includes('power') || t.includes('elect')) return Zap;
+        if (t.includes('health')) return ShieldAlert;
+        if (t.includes('success')) return CheckCircle2;
+        if (t.includes('warning')) return AlertTriangle;
+        return Info;
     };
 
     const getColor = (type: string) => {
-        switch (type.toLowerCase()) {
-            case 'item_critical':
-            case 'emergency': return COLORS.error;
-            case 'success': return COLORS.success;
-            case 'warning': return COLORS.warning;
-            case 'info':
-            default: return COLORS.info;
-        }
+        const t = type.toLowerCase();
+        if (t.includes('emergency') || t.includes('critical')) return COLORS.error;
+        if (t.includes('water') || t.includes('road') || t.includes('power')) return COLORS.primary;
+        if (t.includes('success')) return COLORS.success;
+        if (t.includes('warning')) return COLORS.warning;
+        return COLORS.info;
     };
 
     const getTimeAgo = (dateString: string) => {
@@ -478,10 +463,14 @@ export default function AlertsScreen() {
                     )}
                 </View>
 
-                <ScrollView
-                    ref={scrollViewRef}
-                    showsVerticalScrollIndicator={false}
+                <FlatList
+                    data={notifications}
+                    keyExtractor={(item) => item.id}
                     contentContainerStyle={styles.scroll}
+                    showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={true}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -490,15 +479,14 @@ export default function AlertsScreen() {
                             tintColor={COLORS.primary}
                         />
                     }
-                >
-                    {/* Swipe hint */}
-                    {notifications.length > 0 && (
-                        <View style={styles.swipeHint}>
-                            <Text style={styles.swipeHintText}>← Swipe left or right to delete →</Text>
-                        </View>
+                    ListHeaderComponent={() => (
+                        notifications.length > 0 ? (
+                            <View style={styles.swipeHint}>
+                                <Text style={styles.swipeHintText}>← Swipe to delete →</Text>
+                            </View>
+                        ) : null
                     )}
-
-                    {notifications.length === 0 ? (
+                    ListEmptyComponent={() => (
                         <View style={styles.emptyContainer}>
                             <View style={styles.emptyIconContainer}>
                                 <Info size={48} color={COLORS.textMuted} />
@@ -508,23 +496,19 @@ export default function AlertsScreen() {
                                 You're all caught up! New alerts will appear here.
                             </Text>
                         </View>
-                    ) : (
-                        notifications.map((notification, index) => (
-                            <SwipeableNotification
-                                key={notification.id}
-                                notification={notification}
-                                index={index}
-                                onPress={() => handleNotificationPress(notification)}
-                                onDelete={() => deleteNotification(notification.id, notification.isBroadcast || false)}
-                                getIcon={getIcon}
-                                getColor={getColor}
-                                getTimeAgo={getTimeAgo}
-                            />
-                        ))
                     )}
-
-                    <View style={{ height: 120 }} />
-                </ScrollView>
+                    renderItem={({ item, index }) => (
+                        <SwipeableNotification
+                            notification={item}
+                            onPress={() => handleNotificationPress(item)}
+                            onDelete={() => deleteNotification(item.id, item.isBroadcast || false)}
+                            getIcon={getIcon}
+                            getColor={getColor}
+                            getTimeAgo={getTimeAgo}
+                        />
+                    )}
+                    ListFooterComponent={() => <View style={{ height: 120 }} />}
+                />
             </SafeAreaView>
         </View>
     );
@@ -567,38 +551,28 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        bottom: 16,
+        bottom: 12,
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: COLORS.error,
-        borderRadius: 24,
-        paddingHorizontal: 24,
+        borderRadius: 20,
     },
-    deleteLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
+    alertWrapper: {
+        marginBottom: 12,
+        borderRadius: 20,
+        overflow: 'hidden',
     },
-    deleteRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    deleteText: {
-        color: COLORS.white,
-        fontWeight: '800',
-        fontSize: 14,
+    alertCardContainer: {
+        backgroundColor: COLORS.background,
     },
     alertCard: {
         flexDirection: 'row',
-        backgroundColor: COLORS.white,
-        borderRadius: 24,
-        padding: 18,
-        marginBottom: 16,
+        backgroundColor: COLORS.white + 'F5', // aero transparency
+        borderRadius: 20,
+        padding: 16,
         ...SHADOWS.soft,
-        borderLeftWidth: 5,
-        borderLeftColor: COLORS.textMuted
+        borderLeftWidth: 4,
     },
     unreadCard: {
         backgroundColor: COLORS.white,
