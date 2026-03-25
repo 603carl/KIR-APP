@@ -262,45 +262,45 @@ export default function DashboardScreen() {
     return past.toLocaleDateString();
   };
 
-    const handleSOS = async () => {
-      // 1. Instant UI Feedback - Visual and Haptic
-      if (sosActive) {
-        // Immediate shutdown as requested
-        try {
-          setSosActive(false);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-          
-          const { data: { user } } = await supabase.auth.getUser();
-          if (user) {
-            await supabase
-              .from('sos_alerts')
-              .update({ status: 'cancelled' })
-              .eq('user_id', user.id)
-              .eq('status', 'active');
-            
-            // Immediately reflect in Alerts for Watch Command
-            await supabase.from('alerts').insert({
-              rule_name: 'SOS_CANCELLED',
-              message: `SOS Cancelled by user ${userName}`,
-              severity: 'info',
-              user_id: user.id
-            });
-          }
-        } catch (e) {
-          console.error('Cancel SOS error:', e);
-        }
-        return;
-      }
+  const handleSOS = async () => {
+    // 1. Instant UI Feedback - Visual and Haptic
+    if (sosActive) {
+      // Immediate shutdown as requested
+      try {
+        setSosActive(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
-      // --- ONE-TAP ULTRA-FAST SOS PATH START ---
-      setSosActive(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase
+            .from('sos_alerts')
+            .update({ status: 'cancelled' })
+            .eq('user_id', user.id)
+            .eq('status', 'active');
+
+          // Immediately reflect in Alerts for Watch Command
+          await supabase.from('alerts').insert({
+            rule_name: 'SOS_CANCELLED',
+            message: `SOS Cancelled by user ${userName}`,
+            severity: 'info',
+            user_id: user.id
+          });
+        }
+      } catch (e) {
+        console.error('Cancel SOS error:', e);
+      }
+      return;
+    }
+
+    // --- ONE-TAP ULTRA-FAST SOS PATH START ---
+    setSosActive(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
     try {
       // CRITICAL: Proactive Session Refresh before SOS to prevent JWT failure
       const { data: sessionData } = await supabase.auth.refreshSession();
       let user = sessionData.user;
-      
+
       if (!user) {
         const { data } = await supabase.auth.getUser();
         user = data.user;
@@ -361,7 +361,7 @@ export default function DashboardScreen() {
               const loc = results[0];
               const resolvedAddress = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
               const county = normalizeCounty(loc.region || loc.city || '');
-              
+
               await supabase.from('sos_alerts').update({
                 location_name: resolvedAddress || 'Street identified',
                 county: county
@@ -381,7 +381,7 @@ export default function DashboardScreen() {
       }
 
       // 5. Confirmation (Non-blocking)
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => { });
 
     } catch (error: any) {
       console.error('SOS EXECUTION FAILED:', error);
@@ -407,18 +407,16 @@ export default function DashboardScreen() {
         >
 
           <View style={styles.header}>
-            <View style={styles.headerTitles}>
-              <Text style={styles.headerTitle}>Kenya Incident Hub</Text>
-              <View style={styles.greetingRow}>
-                <Text style={styles.greeting}>Habari, <Text style={{ fontWeight: '900', color: COLORS.primary }}>{userName}</Text></Text>
-                <TouchableOpacity style={styles.profileBadge}>
-                  <View style={styles.verifiedIconContainer}>
-                    <ShieldCheck color={COLORS.white} size={12} />
-                  </View>
-                  <Text style={styles.badgeText}>Verified</Text>
-                </TouchableOpacity>
-              </View>
+            <View style={styles.headerTopRow}>
+              <Text style={styles.greeting}>Habari, <Text style={{ fontWeight: '900', color: COLORS.primary }}>{userName}</Text></Text>
+              <TouchableOpacity style={styles.profileBadge}>
+                <View style={styles.verifiedIconContainer}>
+                  <ShieldCheck color={COLORS.white} size={12} />
+                </View>
+                <Text style={styles.badgeText}>Verified</Text>
+              </TouchableOpacity>
             </View>
+            <Text style={styles.headerTitle}>Kenya Incident Hub</Text>
           </View>
 
           {/* Search Box */}
@@ -464,136 +462,6 @@ export default function DashboardScreen() {
             </LinearGradient>
           </View>
 
-          {/* Standalone 3D SOS Button */}
-          <View style={styles.sosSection}>
-            <TouchableOpacity
-              onPress={handleSOS}
-              activeOpacity={0.9}
-              style={styles.sos3DTouchable}
-            >
-              <MotiView
-                animate={{ 
-                  scale: sosActive ? [1, 1.1, 1] : 1,
-                  shadowOpacity: sosActive ? 0.8 : 0.4
-                }}
-                transition={{ loop: sosActive, type: 'timing', duration: 800 }}
-                style={styles.sos3DBase}
-              >
-                <LinearGradient
-                  colors={['#FF4D4D', '#D32F2F', '#991B1B']}
-                  style={styles.sosButtonCircle}
-                >
-                  <View style={styles.sosInnerRing}>
-                    <Text style={styles.sosTextLabel}>SOS</Text>
-                  </View>
-                </LinearGradient>
-              </MotiView>
-            </TouchableOpacity>
-            <Text style={styles.sosWarningFull}>Only For Emergency</Text>
-          </View>
-
-          {/* Quick Categories */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Quick Report</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/my-reports')}>
-              <Text style={styles.seeAll}>See All</Text>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
-            <TouchableOpacity
-              style={[styles.categoryCard, !selectedCategory && { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' }]}
-              onPress={() => setSelectedCategory(null)}
-            >
-              <View style={[styles.catIconBox, { backgroundColor: '#DBEAFE' }]}>
-                <TrendingUp color="#3B82F6" size={26} strokeWidth={2.5} />
-              </View>
-              <Text style={styles.catTitle}>All</Text>
-            </TouchableOpacity>
-            {CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat.id}
-                style={[styles.categoryCard, selectedCategory === cat.title && { borderColor: cat.color, backgroundColor: cat.color + '10' }]}
-                onPress={() => setSelectedCategory(selectedCategory === cat.title ? null : cat.title)}
-              >
-                <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}>
-                  <cat.icon color={cat.color} size={26} strokeWidth={2.5} />
-                </View>
-                <Text style={styles.catTitle}>{cat.title}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-
-          {/* Recent Activity Feed */}
-          <View style={[styles.sectionHeader, { marginBottom: 12 }]}>
-            <View>
-              <Text style={styles.sectionTitle}>Community Feed</Text>
-              <MotiView
-                from={{ opacity: 0, translateX: -10 }}
-                animate={{ opacity: 1, translateX: 0 }}
-                style={styles.aiBadge}
-              >
-                <Zap size={12} color="#4A5568" />
-                <Text style={styles.aiBadgeText}>AI RANKED</Text>
-              </MotiView>
-            </View>
-            <View style={styles.liveIndicator}>
-              <View style={styles.dot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
-          </View>
-
-          {loading && incidents.length === 0 ? (
-            // Skeleton Loading State
-            [1, 2, 3].map((key) => <SkeletonCard key={key} />)
-          ) : (
-            incidents.map((item, index) => (
-              <TouchableOpacity
-                key={item.id}
-                onPress={() => router.push(`/incident/${item.id}`)}
-                activeOpacity={0.9}
-              >
-                <MotiView
-                  from={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: index * 50 }}
-                  style={styles.incidentCard}
-                >
-                  <Image
-                    source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }}
-                    style={styles.incidentImage}
-                  />
-                  <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.8)']}
-                    style={styles.imageOverlay}
-                  />
-                  <View style={styles.incidentContent}>
-                    <View style={styles.incidentHeader}>
-                      <Text style={styles.incidentTitle}>{item.title}</Text>
-                      <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}>
-                        <View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} />
-                        <Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Pending'}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.incidentLoc}>{item.location_name} • {getTimeAgo(item.created_at)}</Text>
-
-                    <View style={styles.incidentFooter}>
-                      <View style={styles.impactBox}>
-                        <TrendingUp size={14} color={COLORS.primary} />
-                        <Text style={styles.impactText}>{item.category}</Text>
-                      </View>
-                      <View style={styles.viewBtn}>
-                        <Text style={styles.viewBtnText}>View Details</Text>
-                        <ChevronRight size={14} color={COLORS.primary} />
-                      </View>
-                    </View>
-                  </View>
-                </MotiView>
-              </TouchableOpacity>
-            ))
-          )}
-
-          <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -605,37 +473,36 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   scroll: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.md },
   header: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 4,
     paddingTop: 0,
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
-  headerTitles: {
-    flex: 1,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -1,
-  },
-  greetingRow: {
+  headerTopRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
-    marginTop: -2,
+    marginBottom: 0,
   },
   greeting: {
-    fontSize: 15,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
+    fontSize: 22,
+    color: '#4A5568',
+    fontWeight: '700',
+    letterSpacing: -0.5,
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.primary,
+    marginTop: -2,
+    letterSpacing: 0.2,
   },
   profileBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F0FDF4',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#DCFCE7',
   },
@@ -646,12 +513,13 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.success,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 4,
+    marginRight: 6,
   },
   badgeText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '900',
     color: COLORS.success,
+    textTransform: 'uppercase',
   },
   searchContainer: { marginBottom: SPACING.lg },
   searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, height: 56, borderRadius: BORDER_RADIUS.lg, paddingHorizontal: SPACING.md, ...SHADOWS.soft },
@@ -662,61 +530,42 @@ const styles = StyleSheet.create({
   statsLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700' },
   statsValue: { color: COLORS.white, fontSize: 32, fontWeight: '900', marginTop: 2 },
   statsTrend: { color: '#4ADE80', fontSize: 12, fontWeight: '800', marginTop: 4 },
-  sosSection: {
-    alignItems: 'center',
-    marginVertical: 24,
+  sosContainer: {
+    marginBottom: SPACING.lg,
   },
-  sos3DTouchable: {
-    width: 160,
-    height: 160,
-    justifyContent: 'center',
-    alignItems: 'center',
+  sosCardContainer: {
+    marginBottom: 24,
+    borderRadius: 32,
+    backgroundColor: '#1A1A1A',
+    overflow: 'hidden',
+    ...SHADOWS.premium,
   },
-  sos3DBase: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: '#171717',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#EF4444',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.4,
-    shadowRadius: 20,
-    elevation: 15,
-  },
-  sosButtonCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 6,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  sosInnerRing: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    borderWidth: 3,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 2,
     borderColor: COLORS.white,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'transparent',
   },
-  sosTextLabel: {
+  sosTextMain: {
     color: COLORS.white,
-    fontSize: 28,
+    fontSize: 16,
     fontWeight: '900',
-    letterSpacing: 1,
   },
-  sosWarningFull: {
-    marginTop: 12,
+  sosLabelContainer: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  sosActionText: {
+    color: COLORS.white,
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  sosWarningText: {
+    color: '#9CA3AF',
     fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.error,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    fontWeight: '700',
+    marginTop: 2,
   },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, marginTop: 12 },
   sectionTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, letterSpacing: -0.5 },
