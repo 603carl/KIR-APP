@@ -158,29 +158,29 @@ const SwipeableNotification = React.memo(({
 
                         <View style={styles.alertContent}>
                             <View style={styles.alertHeader}>
-                                <Text style={[styles.alertType, { color }]}>
-                                    {notification.type.replace('_', ' ').toUpperCase()}
+                                <Text style={[styles.alertType, { color: getColor(notification.type) }]}>
+                                    {notification.type.toUpperCase()}
                                 </Text>
                                 <Text style={styles.alertTime}>{getTimeAgo(notification.created_at)}</Text>
                             </View>
                             
                             <View style={styles.titleRow}>
-                                <Text style={styles.alertTitle} numberOfLines={1}>{notification.title}</Text>
-                                {!notification.is_read && <View style={[styles.dot, { backgroundColor: color }]} />}
+                                <Text numberOfLines={1} style={styles.alertTitle}>
+                                    {notification.title}
+                                </Text>
+                                <TouchableOpacity 
+                                    onPress={(e) => {
+                                        e.stopPropagation();
+                                        onDelete();
+                                    }}
+                                    style={styles.deleteBtn}
+                                >
+                                    <Trash2 size={18} color={COLORS.error} />
+                                </TouchableOpacity>
                             </View>
                             
                             <Text style={styles.alertMessage} numberOfLines={2}>{notification.body}</Text>
                         </View>
-
-                        <TouchableOpacity 
-                            style={styles.directDeleteBtn}
-                            onPress={(e) => {
-                                e.stopPropagation();
-                                onDelete();
-                            }}
-                        >
-                            <Trash2 size={18} color={COLORS.textMuted} opacity={0.5} />
-                        </TouchableOpacity>
                     </BlurView>
                 </TouchableOpacity>
             </Animated.View>
@@ -231,22 +231,27 @@ export default function AlertsScreen() {
         return () => { supabase.removeChannel(channel); };
     }, [fetchNotifications]);
 
-    const markAllRead = async () => {
+    const clearAllNotifications = async () => {
         try {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            
+            // Optimistic clear
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            const userRef = (await supabase.auth.getUser()).data.user?.id;
+            if (!userRef) return;
+
+            setNotifications([]);
+            await SecureStore.setItemAsync('unread_alerts_count', '0');
+
             const { error } = await supabase
                 .from('notifications')
-                .update({ is_read: true })
-                .eq('is_read', false);
+                .delete()
+                .eq('user_id', userRef);
 
             if (error) throw error;
-            
-            // Optimistic update with LayoutAnimation
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-            await SecureStore.setItemAsync('unread_alerts_count', '0');
         } catch (error) {
-            console.error('Error marking all read:', error);
+            console.error('Error clearing notifications:', error);
+            fetchNotifications(true);
         }
     };
 
@@ -330,10 +335,13 @@ export default function AlertsScreen() {
                     <Text style={styles.headerTitle}>Safety Alerts</Text>
                     <Text style={styles.headerSubtitle}>Real-time notifications</Text>
                 </View>
-                
-                <TouchableOpacity style={styles.actionButton} onPress={markAllRead}>
-                    <BlurView intensity={60} tint="light" style={styles.actionBlur}>
-                        <Check size={18} color={COLORS.primary} strokeWidth={3} />
+                <TouchableOpacity 
+                    style={styles.actionButton} 
+                    onPress={clearAllNotifications}
+                    activeOpacity={0.7}
+                >
+                    <BlurView intensity={40} tint="light" style={styles.actionBlur}>
+                        <Check size={16} color={COLORS.primary} />
                         <Text style={styles.actionText}>Clear</Text>
                     </BlurView>
                 </TouchableOpacity>
@@ -403,11 +411,11 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         borderRadius: 24,
         overflow: 'hidden',
-        backgroundColor: COLORS.error,
+        backgroundColor: 'transparent',
     },
     deleteBackground: {
         ...StyleSheet.absoluteFillObject,
-        backgroundColor: COLORS.error,
+        backgroundColor: COLORS.error + '15',
         justifyContent: 'center',
         alignItems: 'flex-end',
         paddingRight: 30,
@@ -420,10 +428,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 16,
         paddingLeft: 20,
-        backgroundColor: COLORS.white + '95',
+        backgroundColor: COLORS.white,
         borderRadius: 24,
-        borderWidth: 1,
-        borderColor: COLORS.white,
+        ...SHADOWS.soft,
+    },
+    deleteBtn: {
+        padding: 4,
+        marginLeft: 8,
     },
     statusLine: {
         position: 'absolute',

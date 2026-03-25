@@ -394,7 +394,7 @@ export default function ProfileScreen() {
                                 transition={{ type: 'spring', damping: 15 }}
                                 style={styles.floatingGlass}
                             >
-                                <BlurView intensity={Platform.OS === 'ios' ? 70 : 100} tint="light" style={styles.glassContent}>
+                                <BlurView intensity={30} tint="light" style={styles.glassContent}>
                                     <View style={styles.profileRow}>
                                         <TouchableOpacity
                                             style={styles.imageContainer}
@@ -461,7 +461,10 @@ export default function ProfileScreen() {
                         {[
                             { id: '1', title: 'First Responder', icon: Star, color: COLORS.gold, earned: stats.isFirstResponder, subtitle: 'Elite Status' },
                             { id: '2', title: 'Action Hero', icon: Award, color: '#10B981', earned: stats.resolved >= 5, subtitle: 'Problem Solver' },
-                            { id: '3', title: 'Verify Pro', icon: Shield, color: COLORS.primary, earned: stats.isCommunitySentinel, subtitle: 'Trustworthy' },
+                            { id: '3', title: 'Verify Pro', icon: Shield, color: COLORS.primary, earned: stats.verifications >= 10, subtitle: 'Trustworthy' },
+                            { id: '4', title: 'Civic Leader', icon: ShieldCheck, color: '#8B5CF6', earned: stats.reports >= 20, subtitle: 'Advocate' },
+                            { id: '5', title: 'Community Watch', icon: User, color: '#EC4899', earned: stats.verifications >= 5, subtitle: 'Guardian' },
+                            { id: '6', title: 'Pro Responder', icon: TrendingUp, color: '#F59E0B', earned: stats.resolved >= 2, subtitle: 'Expert' },
                         ].map(item => (
                             <MotiView
                                 key={item.id}
@@ -926,9 +929,7 @@ const styles = StyleSheet.create({
         borderRadius: 32,
         overflow: 'hidden',
         ...SHADOWS.premium,
-        backgroundColor: COLORS.white + '95',
-        borderWidth: 1,
-        borderColor: COLORS.white,
+        backgroundColor: 'rgba(255, 255, 255, 0.6)',
     },
     glassContent: {
         padding: 24,
