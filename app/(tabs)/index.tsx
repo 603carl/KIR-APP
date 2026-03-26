@@ -16,7 +16,6 @@ import {
   TrendingUp,
   Truck,
   Zap,
-  PhoneCall
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { MotiView } from 'moti';
@@ -75,10 +74,9 @@ export default function DashboardScreen() {
     }
   };
 
-  // 1. Initial mounting tasks - OPTIMIZED with parallel loading and local cache
+  // 1. Initial mounting tasks
   useEffect(() => {
     loadCachedData().then(() => {
-      // Load all initial data in parallel for faster startup AFTER cache fills UI
       Promise.all([
         fetchUser(),
         fetchStats(),
@@ -89,10 +87,9 @@ export default function DashboardScreen() {
     const subscription = supabase
       .channel('public:incidents')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'incidents' }, (payload) => {
-        // Optimistic UI Update: instantly push new incident to feed
         const newIncident = payload.new as Incident;
         setIncidents(prev => [newIncident, ...prev]);
-        fetchStats(); // Update numbers
+        fetchStats();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'incidents' }, (payload) => {
         const updated = payload.new as Incident;
@@ -114,11 +111,9 @@ export default function DashboardScreen() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Cache user for reuse in SOS and other functions
     cachedUser.current = user;
 
-    // Fetch from profiles table for the correct name
-    const { data: profile, error } = await supabase
+    const { data: profile } = await supabase
       .from('profiles')
       .select('full_name')
       .eq('id', user.id)
@@ -127,40 +122,8 @@ export default function DashboardScreen() {
     if (profile?.full_name && profile.full_name !== 'Citizen') {
       setUserName(profile.full_name.split(' ')[0]);
     } else {
-      // Profile missing or has generic name
       const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
-      const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
-
-      if (!profile && !error || (error && (error as any).code === 'PGRST116')) {
-        // Attempt to create profile from user metadata if it's missing
-        const county = user.user_metadata?.county || '';
-
-        const { data: newProfile, error: createError } = await supabase
-          .from('profiles')
-          .insert({
-            id: user.id,
-            full_name: fullName,
-            email: user.email,
-            avatar_url: avatarUrl,
-            location_name: county,
-            role: 'reporter'
-          })
-          .select()
-          .single();
-
-        if (!createError && newProfile) {
-          setUserName(newProfile.full_name?.split(' ')[0] || 'Citizen');
-        }
-      } else if (profile?.full_name === 'Citizen' && fullName !== 'Citizen') {
-        // Update generic name with metadata name
-        await supabase.from('profiles').update({
-          full_name: fullName,
-          avatar_url: avatarUrl
-        }).eq('id', user.id);
-        setUserName(fullName.split(' ')[0]);
-      } else if (profile?.full_name) {
-        setUserName(profile.full_name.split(' ')[0]);
-      }
+      setUserName(fullName.split(' ')[0]);
     }
   };
 
@@ -182,27 +145,18 @@ export default function DashboardScreen() {
     }
   };
 
-
   const checkLocationPermission = async () => {
     if (isRequestingLocation.current) return;
     isRequestingLocation.current = true;
-
     try {
-      // Small delay to ensure the screen is fully mounted and animations finished
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
       const { status: currentStatus } = await Location.getForegroundPermissionsAsync();
       let finalStatus = currentStatus;
-
       if (currentStatus !== 'granted') {
         const { status } = await Location.requestForegroundPermissionsAsync();
         finalStatus = status;
       }
-
       if (finalStatus === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced
-        });
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setUserLocation(loc);
       }
     } catch (e) {
@@ -216,7 +170,6 @@ export default function DashboardScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
       const lat = userLocation?.coords.latitude || null;
       const lng = userLocation?.coords.longitude || null;
 
@@ -231,8 +184,6 @@ export default function DashboardScreen() {
 
       if (error) throw error;
       setIncidents(data || []);
-
-      // Cache results so next load is instant
       if (!searchQuery && !selectedCategory) {
         AsyncStorage.setItem(CACHE_KEY_INCIDENTS, JSON.stringify(data || []));
       }
@@ -256,29 +207,19 @@ export default function DashboardScreen() {
     const diffInMs = now.getTime() - past.getTime();
     const diffInMins = Math.floor(diffInMs / (1000 * 60));
     const diffInHours = Math.floor(diffInMins / 60);
-
     if (diffInMins < 60) return `${diffInMins}m ago`;
     if (diffInHours < 24) return `${diffInHours}h ago`;
     return past.toLocaleDateString();
   };
 
   const handleSOS = async () => {
-    // 1. Instant UI Feedback - Visual and Haptic
     if (sosActive) {
-      // Immediate shutdown as requested
       try {
         setSosActive(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
-          await supabase
-            .from('sos_alerts')
-            .update({ status: 'cancelled' })
-            .eq('user_id', user.id)
-            .eq('status', 'active');
-
-          // Immediately reflect in Alerts for Watch Command
+          await supabase.from('sos_alerts').update({ status: 'cancelled' }).eq('user_id', user.id).eq('status', 'active');
           await supabase.from('alerts').insert({
             rule_name: 'SOS_CANCELLED',
             message: `SOS Cancelled by user ${userName}`,
@@ -286,111 +227,57 @@ export default function DashboardScreen() {
             user_id: user.id
           });
         }
-      } catch (e) {
-        console.error('Cancel SOS error:', e);
-      }
+      } catch (e) { console.error('Cancel SOS error:', e); }
       return;
     }
 
-    // --- ONE-TAP ULTRA-FAST SOS PATH START ---
     setSosActive(true);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
     try {
-      // CRITICAL: Proactive Session Refresh before SOS to prevent JWT failure
-      const { data: sessionData } = await supabase.auth.refreshSession();
-      let user = sessionData.user;
-
-      if (!user) {
-        const { data } = await supabase.auth.getUser();
-        user = data.user;
-      }
-
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setSosActive(false);
         Alert.alert('Error', 'Please log in to use SOS.');
         return;
       }
 
-      // 2. Location Bypass - Try last known position FIRST for instant result
-      let lat = userLocation?.coords.latitude;
-      let lng = userLocation?.coords.longitude;
+      const lat = userLocation?.coords.latitude || -1.2921;
+      const lng = userLocation?.coords.longitude || 36.8219;
 
-      if (!lat || !lng) {
-        // Background request if cache is empty
-        const lastLoc = await Location.getLastKnownPositionAsync({});
-        if (lastLoc) {
-          lat = lastLoc.coords.latitude;
-          lng = lastLoc.coords.longitude;
-        } else {
-          // Deep fallback if device has NO location history
-          const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            const freshLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
-            lat = freshLoc.coords.latitude;
-            lng = freshLoc.coords.longitude;
-          }
-        }
-      }
-
-      // 3. Fast-Path Insert: Coordinate-only insert to bypass slow geocoding
-      // CRITICAL: Explicit 15s Timeout to prevent "infinite loading"
-      const timeout = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
-
-      const insertPromise = supabase.from('sos_alerts').insert({
+      const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
         user_id: user.id,
-        lat: lat || -1.2921, // Default to Nairobi center if total location failure
-        lng: lng || 36.8219,
-        location_name: 'Locating in progress...',
+        lat,
+        lng,
+        location_name: 'Locating...',
         status: 'active'
       }).select().single();
 
-      const { data: sosData, error: sosError } = await Promise.race([
-        insertPromise,
-        timeout(15000)
-      ]) as any;
-
       if (sosError) throw sosError;
 
-      // 4. Background Enrichment - Don't block the UI for geocoding
-      if (lat && lng) {
-        (async () => {
-          try {
-            const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
-            if (results && results[0]) {
-              const loc = results[0];
-              const resolvedAddress = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
-              const county = normalizeCounty(loc.region || loc.city || '');
-
-              await supabase.from('sos_alerts').update({
-                location_name: resolvedAddress || 'Street identified',
-                county: county
-              }).eq('id', sosData.id);
-
-              // Update system alerts table for Watch Command
-              await supabase.from('alerts').insert({
-                rule_name: 'SOS EMERGENCY',
-                message: `CRITICAL: SOS from user at ${resolvedAddress || 'Coordinates'}`,
-                severity: 'critical',
-                user_id: user.id,
-                sos_alert_id: sosData.id
-              });
-            }
-          } catch (e) { console.warn('[SOS Enrichment Failed]', e); }
-        })();
-      }
-
-      // 5. Confirmation (Non-blocking)
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => { });
-
-    } catch (error: any) {
-      console.error('SOS EXECUTION FAILED:', error);
+      // Async location enrichment
+      (async () => {
+        try {
+          const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+          if (results && results[0]) {
+            const loc = results[0];
+            const address = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
+            const county = normalizeCounty(loc.region || loc.city || '');
+            await supabase.from('sos_alerts').update({ location_name: address, county }).eq('id', sosData.id);
+            await supabase.from('alerts').insert({
+              rule_name: 'SOS EMERGENCY',
+              message: `CRITICAL: SOS from user at ${address}`,
+              severity: 'critical',
+              user_id: user.id,
+              sos_alert_id: sosData.id
+            });
+          }
+        } catch (e) { console.warn('SOS enrichment fail', e); }
+      })();
+    } catch (error) {
+      console.error('SOS FAILED:', error);
       setSosActive(false);
-      if (error.message === 'timeout') {
-        Alert.alert('Timeout Error', 'The server is taking too long to respond. Your SOS may still be delivered, but please check your local connection or call 999.');
-      } else {
-        Alert.alert('SOS Failure', 'System link error. Please call 999 directly.');
-      }
+      Alert.alert('SOS Failure', 'System link error. Please call 999.');
     }
   };
 
@@ -401,11 +288,8 @@ export default function DashboardScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scroll}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />}
         >
-
           <View style={styles.header}>
             <View style={styles.headerTopRow}>
               <Text style={styles.greeting}>Habari, <Text style={{ fontWeight: '900', color: COLORS.primary }}>{userName}</Text></Text>
@@ -419,16 +303,11 @@ export default function DashboardScreen() {
             <Text style={styles.headerTitle}>Kenya Incident Hub</Text>
           </View>
 
-          {/* Search Box */}
-          <MotiView
-            from={{ opacity: 0, translateY: 10 }}
-            animate={{ opacity: 1, translateY: 0 }}
-            style={styles.searchContainer}
-          >
+          <MotiView from={{ opacity: 0, translateY: 10 }} animate={{ opacity: 1, translateY: 0 }} style={styles.searchContainer}>
             <View style={styles.searchBox}>
               <Search size={22} color="#94A3B8" />
               <TextInput
-                placeholder="Search incidents or locations..."
+                placeholder="Search incidents..."
                 style={styles.searchInput}
                 placeholderTextColor="#94A3B8"
                 value={searchQuery}
@@ -437,78 +316,42 @@ export default function DashboardScreen() {
             </View>
           </MotiView>
 
-          {/* National Stats */}
           <View style={styles.statsContainer}>
-            <LinearGradient
-              colors={['#064E3B', '#022C22']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.statsCard}
-            >
+            <LinearGradient colors={['#064E3B', '#022C22']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.statsCard}>
               <View style={styles.statsContent}>
                 <View>
                   <Text style={styles.statsLabel}>National Resolved</Text>
                   <Text style={styles.statsValue}>{stats.resolvedRate}</Text>
-                  <Text style={styles.statsTrend}>{stats.trend} from last week</Text>
+                  <Text style={styles.statsTrend}>{stats.trend} this week</Text>
                 </View>
-                <MotiView
-                  from={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  style={{ alignSelf: 'flex-start', marginTop: 10 }}
-                >
-                  <TrendingUp color="#4ADE80" size={48} strokeWidth={3} />
-                </MotiView>
+                <TrendingUp color="#4ADE80" size={48} strokeWidth={3} />
               </View>
             </LinearGradient>
           </View>
 
-          {/* SOS Horizontal 3D Redesign */}
-          <MotiView
-            from={{ scale: 0.95, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            style={styles.sosCardContainer}
-          >
-            <TouchableOpacity
-              onPress={handleSOS}
-              activeOpacity={0.9}
-              style={[styles.sosCardInner, sosActive && styles.sosCardInnerActive]}
-            >
+          <MotiView from={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={styles.sosCardContainer}>
+            <TouchableOpacity onPress={handleSOS} activeOpacity={0.9} style={[styles.sosCardInner, sosActive && styles.sosCardInnerActive]}>
               <View style={styles.sosButtonContainer}>
                 <View style={styles.sos3DShadow} />
-                <LinearGradient
-                  colors={['#FF3B3B', '#DC2626', '#991B1B']}
-                  style={styles.sos3DButton}
-                >
-                  <View style={styles.sosInnerCircle}>
-                    <Text style={styles.sosButtonText}>SOS</Text>
-                  </View>
+                <LinearGradient colors={['#FF3B3B', '#DC2626', '#991B1B']} style={styles.sos3DButton}>
+                  <View style={styles.sosInnerCircle}><Text style={styles.sosButtonText}>SOS</Text></View>
                 </LinearGradient>
               </View>
-
               <View style={styles.sosTextBody}>
                 <Text style={styles.sosMainLabel}>{sosActive ? 'SOS ACTIVE' : 'SOS Emergency'}</Text>
                 <Text style={styles.sosSubLabel}>Only For Emergency</Text>
               </View>
-
               {sosActive && (
-                <MotiView
-                  from={{ opacity: 0.4, scale: 1 }}
-                  animate={{ opacity: 1, scale: 1.2 }}
-                  transition={{ loop: true, type: 'timing', duration: 1000 }}
-                  style={styles.activePulse}
-                >
+                <MotiView from={{ opacity: 0.4, scale: 1 }} animate={{ opacity: 1, scale: 1.2 }} transition={{ loop: true, type: 'timing', duration: 1000 }} style={styles.activePulse}>
                   <View style={styles.pulseDot} />
                 </MotiView>
               )}
             </TouchableOpacity>
           </MotiView>
 
-          {/* Quick Categories */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Quick Report</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/my-reports')}>
-              <Text style={styles.seeAll}>See All</Text>
-            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/my-reports')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
@@ -516,9 +359,7 @@ export default function DashboardScreen() {
               style={[styles.categoryCard, !selectedCategory && { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' }]}
               onPress={() => setSelectedCategory(null)}
             >
-              <View style={[styles.catIconBox, { backgroundColor: '#DBEAFE' }]}>
-                <TrendingUp color="#3B82F6" size={26} strokeWidth={2.5} />
-              </View>
+              <View style={[styles.catIconBox, { backgroundColor: '#DBEAFE' }]}><TrendingUp color="#3B82F6" size={26} /></View>
               <Text style={styles.catTitle}>All</Text>
             </TouchableOpacity>
             {CATEGORIES.map((cat) => (
@@ -527,82 +368,46 @@ export default function DashboardScreen() {
                 style={[styles.categoryCard, selectedCategory === cat.title && { borderColor: cat.color, backgroundColor: cat.color + '10' }]}
                 onPress={() => setSelectedCategory(selectedCategory === cat.title ? null : cat.title)}
               >
-                <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}>
-                  <cat.icon color={cat.color} size={26} strokeWidth={2.5} />
-                </View>
+                <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}><cat.icon color={cat.color} size={26} /></View>
                 <Text style={styles.catTitle}>{cat.title}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
 
-          {/* Recent Activity Feed */}
           <View style={[styles.sectionHeader, { marginBottom: 12 }]}>
             <View>
               <Text style={styles.sectionTitle}>Community Feed</Text>
-              <MotiView
-                from={{ opacity: 0, translateX: -10 }}
-                animate={{ opacity: 1, translateX: 0 }}
-                style={styles.aiBadge}
-              >
+              <MotiView from={{ opacity: 0, translateX: -10 }} animate={{ opacity: 1, translateX: 0 }} style={styles.aiBadge}>
                 <Zap size={12} color="#4A5568" />
                 <Text style={styles.aiBadgeText}>AI RANKED</Text>
               </MotiView>
             </View>
-            <View style={styles.liveIndicator}>
-              <View style={styles.dot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
+            <View style={styles.liveIndicator}><View style={styles.dot} /><Text style={styles.liveText}>LIVE</Text></View>
           </View>
 
           {loading && incidents.length === 0 ? (
             [1, 2, 3].map((key) => <SkeletonCard key={key} />)
           ) : (
             incidents.map((item, index) => (
-              <TouchableOpacity
-                key={item.id}
-                onPress={() => router.push(`/incident/${item.id}`)}
-                activeOpacity={0.9}
-              >
-                <MotiView
-                  from={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: index * 50 }}
-                  style={styles.incidentCard}
-                >
-                  <Image
-                    source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }}
-                    style={styles.incidentImage}
-                  />
-                  <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.8)']}
-                    style={styles.imageOverlay}
-                  />
+              <TouchableOpacity key={item.id} onPress={() => router.push(`/incident/${item.id}`)} activeOpacity={0.9}>
+                <MotiView from={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: index * 50 }} style={styles.incidentCard}>
+                  <Image source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }} style={styles.incidentImage} />
+                  <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.imageOverlay} />
                   <View style={styles.incidentContent}>
                     <View style={styles.incidentHeader}>
-                      <Text style={styles.incidentTitle}>{item.title}</Text>
-                      <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}>
-                        <View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} />
-                        <Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Pending'}</Text>
-                      </View>
+                      <Text style={styles.incidentTitle} numberOfLines={1}>{item.title}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}><View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} /><Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Active'}</Text></View>
                     </View>
                     <Text style={styles.incidentLoc}>{item.location_name} • {getTimeAgo(item.created_at)}</Text>
-
                     <View style={styles.incidentFooter}>
-                      <View style={styles.impactBox}>
-                        <TrendingUp size={14} color={COLORS.primary} />
-                        <Text style={styles.impactText}>{item.category}</Text>
-                      </View>
-                      <View style={styles.viewBtn}>
-                        <Text style={styles.viewBtnText}>View Details</Text>
-                        <ChevronRight size={14} color={COLORS.primary} />
-                      </View>
+                      <View style={styles.impactBox}><TrendingUp size={14} color={COLORS.primary} /><Text style={styles.impactText}>{item.category}</Text></View>
+                      <View style={styles.viewBtn}><Text style={styles.viewBtnText}>View</Text><ChevronRight size={14} color={COLORS.primary} /></View>
                     </View>
                   </View>
                 </MotiView>
               </TouchableOpacity>
             ))
           )}
-
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
@@ -613,174 +418,61 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   safe: { flex: 1 },
-  scroll: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.md },
-  header: {
-    paddingHorizontal: 4,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  headerTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 0,
-  },
-  greeting: {
-    fontSize: 24,
-    color: '#1A202C',
-    fontWeight: '700',
-    letterSpacing: -0.5,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.primary,
-    marginTop: -2,
-    letterSpacing: 0.2,
-  },
-  profileBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0FDF4',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#DCFCE7',
-  },
-  verifiedIconContainer: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: COLORS.success,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 6,
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.success,
-    textTransform: 'uppercase',
-  },
-  searchContainer: { marginBottom: SPACING.lg },
-  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, height: 56, borderRadius: BORDER_RADIUS.lg, paddingHorizontal: SPACING.md, ...SHADOWS.soft },
-  searchInput: { flex: 1, marginLeft: 12, fontSize: 16, color: COLORS.black },
-  statsContainer: { marginBottom: SPACING.lg },
-  statsCard: { height: 130, borderRadius: 24, padding: 20, justifyContent: 'center' },
+  scroll: { paddingHorizontal: SPACING.lg, paddingTop: 8 },
+  header: { paddingHorizontal: 4, paddingBottom: 16 },
+  headerTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  greeting: { fontSize: 24, fontWeight: '700', color: '#1A202C' },
+  headerTitle: { fontSize: 14, fontWeight: '700', color: COLORS.primary, marginTop: -2 },
+  profileBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0FDF4', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#DCFCE7' },
+  verifiedIconContainer: { width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.success, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
+  badgeText: { fontSize: 10, fontWeight: '900', color: COLORS.success, textTransform: 'uppercase' },
+  searchContainer: { marginBottom: 20 },
+  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, height: 52, borderRadius: 16, paddingHorizontal: 16, ...SHADOWS.soft },
+  searchInput: { flex: 1, marginLeft: 12, fontSize: 15, color: COLORS.black },
+  statsContainer: { marginBottom: 24 },
+  statsCard: { padding: 20, borderRadius: 24 },
   statsContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   statsLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700' },
   statsValue: { color: COLORS.white, fontSize: 32, fontWeight: '900', marginTop: 2 },
-  statsTrend: { color: '#4ADE80', fontSize: 12, fontWeight: '800', marginTop: 4 },
-  sosCardContainer: {
-    marginBottom: 24,
-    borderRadius: 32,
-    backgroundColor: '#171717',
-    overflow: 'hidden',
-    ...SHADOWS.premium,
-  },
-  sosCardInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  sosCardInnerActive: {
-    backgroundColor: '#2D0A0A',
-  },
-  sosButtonContainer: {
-    width: 80,
-    height: 80,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sos3DShadow: {
-    position: 'absolute',
-    bottom: 2,
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: '#000',
-    opacity: 0.8,
-  },
-  sos3DButton: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 10,
-    borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  sosInnerCircle: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sosButtonText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  sosTextBody: {
-    flex: 1,
-    marginLeft: 20,
-  },
-  sosMainLabel: {
-    color: COLORS.white,
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  sosSubLabel: {
-    color: '#94A3B8',
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  activePulse: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: 'rgba(239, 68, 68, 0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#EF4444',
-  },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, marginTop: 12 },
-  sectionTitle: { fontSize: 22, fontWeight: '900', color: COLORS.black, letterSpacing: -0.5 },
-  aiBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EDF2F7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, marginTop: 6 },
-  aiBadgeText: { fontSize: 10, fontWeight: '900', color: '#4A5568', letterSpacing: 1 },
-  seeAll: { color: COLORS.success, fontWeight: '900', fontSize: 14 },
-  categoryScroll: { gap: 12, paddingBottom: 10 },
-  categoryCard: { width: 95, backgroundColor: COLORS.white, padding: 12, borderRadius: 16, alignItems: 'center', ...SHADOWS.soft, borderWidth: 1, borderColor: '#F1F5F9' },
-  catIconBox: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  catTitle: { fontSize: 12, fontWeight: '900', color: COLORS.black },
-  liveIndicator: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEE2E2', paddingHorizontal: 10, paddingVertical: 6, borderRadius: BORDER_RADIUS.full },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.error, marginRight: 6 },
-  liveText: { fontSize: 11, fontWeight: '900', color: COLORS.error, letterSpacing: 1 },
-  incidentCard: { backgroundColor: COLORS.white, borderRadius: BORDER_RADIUS.xl, marginBottom: 16, overflow: 'hidden', ...SHADOWS.premium },
-  incidentImage: { width: '100%', height: 180 },
-  imageOverlay: { ...StyleSheet.absoluteFillObject, height: 180 },
-  incidentContent: { padding: SPACING.lg },
-  incidentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  incidentTitle: { fontSize: FONT_SIZE.lg, fontWeight: '800', color: COLORS.black },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, gap: 6 },
+  statsTrend: { color: '#4ADE80', fontSize: 12, fontWeight: '700', marginTop: 4 },
+  sosCardContainer: { marginBottom: 24, borderRadius: 28, backgroundColor: '#171717', ...SHADOWS.premium },
+  sosCardInner: { flexDirection: 'row', alignItems: 'center', padding: 16 },
+  sosCardInnerActive: { backgroundColor: '#2D0A0A' },
+  sosButtonContainer: { width: 80, height: 80, justifyContent: 'center', alignItems: 'center' },
+  sos3DShadow: { position: 'absolute', bottom: 2, width: 74, height: 74, borderRadius: 37, backgroundColor: '#000', opacity: 0.5 },
+  sos3DButton: { width: 74, height: 74, borderRadius: 37, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: 'rgba(255,255,255,0.2)' },
+  sosInnerCircle: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  sosButtonText: { color: COLORS.white, fontSize: 14, fontWeight: '900' },
+  sosTextBody: { flex: 1, marginLeft: 16 },
+  sosMainLabel: { color: COLORS.white, fontSize: 20, fontWeight: '900' },
+  sosSubLabel: { color: '#94A3B8', fontSize: 13, fontWeight: '600', marginTop: 2 },
+  activePulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(239, 68, 68, 0.4)', justifyContent: 'center', alignItems: 'center' },
+  pulseDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#EF4444' },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sectionTitle: { fontSize: 20, fontWeight: '900', color: COLORS.black },
+  seeAll: { color: COLORS.primary, fontWeight: '700', fontSize: 14 },
+  categoryScroll: { gap: 12, paddingBottom: 16 },
+  categoryCard: { width: 90, backgroundColor: COLORS.white, padding: 12, borderRadius: 16, alignItems: 'center', ...SHADOWS.soft },
+  catIconBox: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8, backgroundColor: '#F8FAFC' },
+  catTitle: { fontSize: 12, fontWeight: '700', color: COLORS.black },
+  aiBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F5F9', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, marginTop: 4 },
+  aiBadgeText: { fontSize: 9, fontWeight: '900', color: '#64748B' },
+  liveIndicator: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEE2E2', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.error, marginRight: 6 },
+  liveText: { fontSize: 10, fontWeight: '900', color: COLORS.error },
+  incidentCard: { backgroundColor: COLORS.white, borderRadius: 24, marginBottom: 16, overflow: 'hidden', ...SHADOWS.soft },
+  incidentImage: { width: '100%', height: 160 },
+  imageOverlay: { ...StyleSheet.absoluteFillObject, height: 160 },
+  incidentContent: { padding: 16 },
+  incidentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  incidentTitle: { fontSize: 16, fontWeight: '800', color: COLORS.black, flex: 1 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, gap: 4 },
   statusDot: { width: 4, height: 4, borderRadius: 2 },
-  statusText: { fontSize: FONT_SIZE.xs, fontWeight: '900' },
-  incidentLoc: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, marginBottom: 12 },
-  incidentFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: COLORS.background, paddingTop: 16 },
+  statusText: { fontSize: 10, fontWeight: '800' },
+  incidentLoc: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 12 },
+  incidentFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12 },
   impactBox: { flexDirection: 'row', alignItems: 'center' },
-  impactText: { marginLeft: 6, fontSize: 13, color: COLORS.textSecondary, fontWeight: '700' },
-  viewBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.primary + '10', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
-  viewBtnText: { color: COLORS.primary, fontSize: 14, fontWeight: '800' },
+  impactText: { marginLeft: 6, fontSize: 12, color: '#64748B', fontWeight: '600' },
+  viewBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  viewBtnText: { color: COLORS.primary, fontSize: 13, fontWeight: '700' },
 });
