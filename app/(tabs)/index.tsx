@@ -18,8 +18,10 @@ import {
   Zap,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
-import { MotiView } from 'moti';
+import { MessageSquare, Shield, X as CloseIcon } from 'lucide-react-native';
+import { MotiView, AnimatePresence } from 'moti';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { SOSChatModal } from '@/components/SOSChatModal';
 import { Alert, Dimensions, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -44,6 +46,37 @@ interface Incident {
   media_urls: string[];
 }
 
+// 0. Memoized Components for Ultra Fast Response
+const CategoryCard = React.memo(({ cat, isSelected, onPress }: { cat: any, isSelected: boolean, onPress: () => void }) => (
+  <TouchableOpacity
+    style={[styles.categoryCard, isSelected && { borderColor: cat.color, backgroundColor: cat.color + '10' }]}
+    onPress={onPress}
+  >
+    <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}><cat.icon color={cat.color} size={26} /></View>
+    <Text style={styles.catTitle}>{cat.title}</Text>
+  </TouchableOpacity>
+));
+
+const IncidentCard = React.memo(({ item, index, onPress, timeAgo }: { item: Incident, index: number, onPress: () => void, timeAgo: string }) => (
+  <TouchableOpacity onPress={onPress} activeOpacity={0.9}>
+    <MotiView from={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: index * 50 }} style={styles.incidentCard}>
+      <Image source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }} style={styles.incidentImage} />
+      <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.imageOverlay} />
+      <View style={styles.incidentContent}>
+        <View style={styles.incidentHeader}>
+          <Text style={styles.incidentTitle} numberOfLines={1}>{item.title}</Text>
+          <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}><View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} /><Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Active'}</Text></View>
+        </View>
+        <Text style={styles.incidentLoc}>{item.location_name} • {timeAgo}</Text>
+        <View style={styles.incidentFooter}>
+          <View style={styles.impactBox}><TrendingUp size={14} color={COLORS.primary} /><Text style={styles.impactText}>{item.category}</Text></View>
+          <View style={styles.viewBtn}><Text style={styles.viewBtnText}>View</Text><ChevronRight size={14} color={COLORS.primary} /></View>
+        </View>
+      </View>
+    </MotiView>
+  </TouchableOpacity>
+));
+
 export default function DashboardScreen() {
   const router = useRouter();
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -55,6 +88,9 @@ export default function DashboardScreen() {
   const [stats, setStats] = useState({ resolvedRate: '0%', trend: '+0%' });
   const [userName, setUserName] = useState('Citizen');
   const [sosActive, setSosActive] = useState(false);
+  const [activeSosId, setActiveSosId] = useState<string | null>(null);
+  const [isChatVisible, setIsChatVisible] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Performance: Cache user to avoid repeated auth calls
   const cachedUser = useRef<any>(null);
@@ -101,6 +137,133 @@ export default function DashboardScreen() {
       supabase.removeChannel(subscription);
     };
   }, []);
+
+  // Track chat visibility via ref so realtime callbacks don't need effect re-runs
+  const isChatVisibleRef = useRef(isChatVisible);
+  useEffect(() => { isChatVisibleRef.current = isChatVisible; }, [isChatVisible]);
+
+  // 1.5 SOS Chat Sync & Active Detection — STABLE (runs once on mount)
+  // We keep track of active subscriptions to avoid duplicates
+  const subscriptionsRef = useRef<{ alertSub: any, messageSub: any }>({ alertSub: null, messageSub: null });
+
+  const clearSosListeners = useCallback(() => {
+    if (subscriptionsRef.current.alertSub) {
+      supabase.removeChannel(subscriptionsRef.current.alertSub);
+      subscriptionsRef.current.alertSub = null;
+    }
+    if (subscriptionsRef.current.messageSub) {
+      supabase.removeChannel(subscriptionsRef.current.messageSub);
+      subscriptionsRef.current.messageSub = null;
+    }
+  }, []);
+
+  const attachSosListeners = useCallback((sosId: string) => {
+    // Clear existing before attaching new ones
+    clearSosListeners();
+
+    // A. Listen for status changes (persistence) — STABLE channel
+    const alertSub = supabase
+      .channel(`sos_status:${sosId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'sos_alerts', filter: `id=eq.${sosId}` },
+        (payload) => {
+          const updated = payload.new as any;
+          if (['resolved', 'cancelled', 'acknowledged'].includes(updated.status)) {
+            setSosActive(false);
+            setActiveSosId(null);
+            setUnreadCount(0);
+            setIsChatVisible(false);
+            clearSosListeners();
+          }
+        }
+      )
+      .subscribe();
+
+    // B. Listen for new operator messages — STABLE channel, uses ref for chat visibility
+    const messageSub = supabase
+      .channel(`sos_messages:${sosId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'sos_messages',
+          filter: `sos_id=eq.${sosId}`
+        },
+        (payload) => {
+          const msg = payload.new as any;
+          if (msg.sender_role !== 'citizen' && !isChatVisibleRef.current) {
+            setUnreadCount(prev => prev + 1);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          }
+        }
+      )
+      .subscribe();
+
+      subscriptionsRef.current = { alertSub, messageSub };
+  }, [clearSosListeners]);
+
+  useEffect(() => {
+
+    const checkActiveSos = async () => {
+      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
+      if (!user) return;
+      if (!cachedUser.current) cachedUser.current = user;
+
+      // 1. Fetch MOST RECENT active SOS session
+      const { data: sosData } = await supabase
+        .from('sos_alerts')
+        .select('id, status')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (sosData) {
+        setSosActive(true);
+        setActiveSosId(sosData.id);
+        
+        // 2. Fetch unread messages count for this SOS
+        const { count } = await supabase
+          .from('sos_messages' as any)
+          .select('*', { count: 'exact', head: true })
+          .eq('sos_id', sosData.id)
+          .neq('sender_role', 'citizen')
+          .is('is_read' as any, false);
+        
+        setUnreadCount(count || 0);
+        
+        attachSosListeners(sosData.id);
+      } else {
+        setSosActive(false);
+        setActiveSosId(null);
+        setUnreadCount(0);
+      }
+    };
+
+    checkActiveSos();
+
+    // 1.7 Global Incident Feed Listener — STABLE
+    const incidentsSub = supabase
+      .channel('public_incidents_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'incidents' },
+        () => {
+          console.log('[Realtime] Incidents update detected, refreshing feed...');
+          fetchIncidents();
+          fetchStats();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearSosListeners();
+      if (incidentsSub) supabase.removeChannel(incidentsSub);
+    };
+  }, [attachSosListeners, clearSosListeners]); // STABLE — no dependencies, channels stay alive
 
   // 2. Fetch incidents when query/category/location changes
   useEffect(() => {
@@ -212,53 +375,107 @@ export default function DashboardScreen() {
     return past.toLocaleDateString();
   };
 
-  const handleSOS = async () => {
+  const cancelSOS = useCallback(async () => {
+    if (!activeSosId) return;
+
+    // INSTANT CANCEL — no dialog, no delay
+    const cancellingId = activeSosId;
+
+    // 1. Reset local state IMMEDIATELY for instant UI feedback
+    setSosActive(false);
+    setActiveSosId(null);
+    setUnreadCount(0);
+    setIsChatVisible(false);
+    clearSosListeners();
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    try {
+      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
+
+      // 2. Update SOS status to cancelled in DB
+      const { error: updateError } = await supabase
+        .from('sos_alerts')
+        .update({
+          status: 'cancelled',
+          resolved_at: new Date().toISOString(),
+        })
+        .eq('id', cancellingId);
+
+      if (updateError) throw updateError;
+
+      // 3. Send a system message so Watch Command knows
+      await supabase.from('sos_messages').insert({
+        sos_id: cancellingId,
+        content: '⚠️ SOS has been cancelled by the citizen.',
+        sender_role: 'citizen',
+        sender_name: userName || 'Citizen',
+        sender_id: user?.id || null,
+      });
+    } catch (error) {
+      console.error('SOS Cancel Error:', error);
+      Alert.alert('Cancel Failed', 'Could not sync cancellation. Please check your connection.');
+    }
+  }, [activeSosId, userName]);
+
+  const handleSOS = useCallback(async () => {
     if (sosActive) {
-      try {
-        setSosActive(false);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from('sos_alerts').update({ status: 'cancelled' }).eq('user_id', user.id).eq('status', 'active');
-          await supabase.from('alerts').insert({
-            rule_name: 'SOS_CANCELLED',
-            message: `SOS Cancelled by user ${userName}`,
-            severity: 'info',
-            user_id: user.id
-          });
-        }
-      } catch (e) { console.error('Cancel SOS error:', e); }
+      // INSTANT CANCEL — one tap to deactivate
+      cancelSOS();
       return;
     }
 
+    // 1. FAST TRIGGER (UI FEEDBACK)
     setSosActive(true);
+    setActiveSosId(null); // Wait for real ID
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
       if (!user) {
         setSosActive(false);
-        Alert.alert('Error', 'Please log in to use SOS.');
+        Alert.alert('Authentication Error', 'Please login to trigger emergency protocols.');
         return;
       }
 
-      const lat = userLocation?.coords.latitude || -1.2921;
-      const lng = userLocation?.coords.longitude || 36.8219;
+      // HIGH ACCURACY FETCH (FRESH)
+      let finalLat = -1.2921;
+      let finalLng = 36.8219;
+      
+      try {
+        const freshLoc = await Location.getCurrentPositionAsync({ 
+          accuracy: Location.Accuracy.BestForNavigation
+        });
+        finalLat = freshLoc.coords.latitude;
+        finalLng = freshLoc.coords.longitude;
+        setUserLocation(freshLoc);
+      } catch (e) {
+        console.warn('High accuracy fetch failed, using state/default', e);
+        if (userLocation) {
+          finalLat = userLocation.coords.latitude;
+          finalLng = userLocation.coords.longitude;
+        }
+      }
 
       const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
         user_id: user.id,
-        lat,
-        lng,
+        lat: finalLat,
+        lng: finalLng,
         location_name: 'Locating...',
         status: 'active'
       }).select().single();
 
       if (sosError) throw sosError;
+      
+      // Update with REAL ID once DB confirms
+      setActiveSosId(sosData.id);
+      
+      // CRITICAL BUG FIX: Attach listeners immediately for NEW sessions!
+      attachSosListeners(sosData.id);
 
       // Async location enrichment
       (async () => {
         try {
-          const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+          const results = await Location.reverseGeocodeAsync({ latitude: finalLat, longitude: finalLng });
           if (results && results[0]) {
             const loc = results[0];
             const address = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
@@ -277,9 +494,10 @@ export default function DashboardScreen() {
     } catch (error) {
       console.error('SOS FAILED:', error);
       setSosActive(false);
+      setActiveSosId(null);
       Alert.alert('SOS Failure', 'System link error. Please call 999.');
     }
-  };
+  }, [sosActive, userLocation, userName, cancelSOS]);
 
   return (
     <View style={styles.container}>
@@ -331,6 +549,9 @@ export default function DashboardScreen() {
 
           <MotiView from={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={styles.sosCardContainer}>
             <TouchableOpacity onPress={handleSOS} activeOpacity={0.9} style={[styles.sosCardInner, sosActive && styles.sosCardInnerActive]}>
+              {sosActive && (
+                <View style={[StyleSheet.absoluteFillObject, { backgroundColor: '#991B1B', borderRadius: 28 }]} />
+              )}
               <View style={styles.sosButtonContainer}>
                 <View style={styles.sos3DShadow} />
                 <LinearGradient colors={['#FF3B3B', '#DC2626', '#991B1B']} style={styles.sos3DButton}>
@@ -363,14 +584,12 @@ export default function DashboardScreen() {
               <Text style={styles.catTitle}>All</Text>
             </TouchableOpacity>
             {CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat.id}
-                style={[styles.categoryCard, selectedCategory === cat.title && { borderColor: cat.color, backgroundColor: cat.color + '10' }]}
+              <CategoryCard 
+                key={cat.id} 
+                cat={cat} 
+                isSelected={selectedCategory === cat.title} 
                 onPress={() => setSelectedCategory(selectedCategory === cat.title ? null : cat.title)}
-              >
-                <View style={[styles.catIconBox, { backgroundColor: cat.color + '15' }]}><cat.icon color={cat.color} size={26} /></View>
-                <Text style={styles.catTitle}>{cat.title}</Text>
-              </TouchableOpacity>
+              />
             ))}
           </ScrollView>
 
@@ -389,28 +608,64 @@ export default function DashboardScreen() {
             [1, 2, 3].map((key) => <SkeletonCard key={key} />)
           ) : (
             incidents.map((item, index) => (
-              <TouchableOpacity key={item.id} onPress={() => router.push(`/incident/${item.id}`)} activeOpacity={0.9}>
-                <MotiView from={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: index * 50 }} style={styles.incidentCard}>
-                  <Image source={{ uri: item.media_urls?.[0] || 'https://images.unsplash.com/photo-1594495894542-a46cc73e081a?q=80&w=400&auto=format&fit=crop' }} style={styles.incidentImage} />
-                  <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.imageOverlay} />
-                  <View style={styles.incidentContent}>
-                    <View style={styles.incidentHeader}>
-                      <Text style={styles.incidentTitle} numberOfLines={1}>{item.title}</Text>
-                      <View style={[styles.statusBadge, { backgroundColor: COLORS.primary + '15' }]}><View style={[styles.statusDot, { backgroundColor: COLORS.primary }]} /><Text style={[styles.statusText, { color: COLORS.primary }]}>{item.status || 'Active'}</Text></View>
-                    </View>
-                    <Text style={styles.incidentLoc}>{item.location_name} • {getTimeAgo(item.created_at)}</Text>
-                    <View style={styles.incidentFooter}>
-                      <View style={styles.impactBox}><TrendingUp size={14} color={COLORS.primary} /><Text style={styles.impactText}>{item.category}</Text></View>
-                      <View style={styles.viewBtn}><Text style={styles.viewBtnText}>View</Text><ChevronRight size={14} color={COLORS.primary} /></View>
-                    </View>
-                  </View>
-                </MotiView>
-              </TouchableOpacity>
+              <IncidentCard 
+                key={item.id} 
+                item={item} 
+                index={index} 
+                onPress={() => router.push(`/incident/${item.id}`)}
+                timeAgo={getTimeAgo(item.created_at)}
+              />
             ))
           )}
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
+
+      {/* SOS Tactical Chat Trigger */}
+      <AnimatePresence>
+        {sosActive && activeSosId && (
+          <MotiView
+            from={{ opacity: 0, scale: 0.5, translateY: 50 }}
+            animate={{ opacity: 1, scale: 1, translateY: 0 }}
+            exit={{ opacity: 0, scale: 0.5, translateY: 50 }}
+            style={styles.chatFabContainer}
+          >
+            <TouchableOpacity 
+              activeOpacity={0.8}
+              onPress={() => {
+                setIsChatVisible(true);
+                setUnreadCount(0);
+              }}
+              style={styles.chatFab}
+            >
+              <LinearGradient
+                colors={[COLORS.accent, '#991B1B']}
+                style={styles.chatFabGradient}
+              >
+                <MessageSquare color={COLORS.white} size={28} />
+                {unreadCount > 0 && (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadText}>{unreadCount}</Text>
+                  </View>
+                )}
+              </LinearGradient>
+              <View style={styles.chatFabLabel}>
+                <Text style={styles.chatFabLabelText}>TACTICAL LINK</Text>
+              </View>
+            </TouchableOpacity>
+          </MotiView>
+        )}
+      </AnimatePresence>
+
+      {/* SOS Chat Modal */}
+      {activeSosId && (
+        <SOSChatModal 
+          isVisible={isChatVisible}
+          onClose={() => setIsChatVisible(false)}
+          sosId={activeSosId}
+          onCancelSOS={cancelSOS}
+        />
+      )}
     </View>
   );
 }
@@ -435,9 +690,9 @@ const styles = StyleSheet.create({
   statsLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700' },
   statsValue: { color: COLORS.white, fontSize: 32, fontWeight: '900', marginTop: 2 },
   statsTrend: { color: '#4ADE80', fontSize: 12, fontWeight: '700', marginTop: 4 },
-  sosCardContainer: { marginBottom: 24, borderRadius: 28, backgroundColor: '#171717', ...SHADOWS.premium },
-  sosCardInner: { flexDirection: 'row', alignItems: 'center', padding: 16 },
-  sosCardInnerActive: { backgroundColor: '#2D0A0A' },
+  sosCardContainer: { marginBottom: 24, borderRadius: 28, backgroundColor: '#DC2626', ...SHADOWS.premium },
+  sosCardInner: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 28, overflow: 'hidden' },
+  sosCardInnerActive: { backgroundColor: 'transparent' },
   sosButtonContainer: { width: 80, height: 80, justifyContent: 'center', alignItems: 'center' },
   sos3DShadow: { position: 'absolute', bottom: 2, width: 74, height: 74, borderRadius: 37, backgroundColor: '#000', opacity: 0.5 },
   sos3DButton: { width: 74, height: 74, borderRadius: 37, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: 'rgba(255,255,255,0.2)' },
@@ -475,4 +730,55 @@ const styles = StyleSheet.create({
   impactText: { marginLeft: 6, fontSize: 12, color: '#64748B', fontWeight: '600' },
   viewBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   viewBtnText: { color: COLORS.primary, fontSize: 13, fontWeight: '700' },
+  chatFabContainer: {
+    position: 'absolute',
+    bottom: 30,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  chatFab: {
+    alignItems: 'center',
+  },
+  chatFabGradient: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...SHADOWS.premium,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  chatFabLabel: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  chatFabLabelText: {
+    color: COLORS.white,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  unreadBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: COLORS.white,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.accent,
+  },
+  unreadText: {
+    color: COLORS.accent,
+    fontSize: 10,
+    fontWeight: '900',
+  },
 });

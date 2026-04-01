@@ -30,7 +30,8 @@ import {
     Text,
     TouchableOpacity,
     View,
-    Platform
+    Platform,
+    ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -276,7 +277,7 @@ export default function AlertsScreen() {
     };
 
     const getIcon = (type: string) => {
-        const t = type.toLowerCase();
+        const t = (type || 'info').toLowerCase();
         if (t.includes('emergency') || t.includes('critical')) return ShieldAlert;
         if (t.includes('water')) return Droplet;
         if (t.includes('road')) return Car;
@@ -287,7 +288,7 @@ export default function AlertsScreen() {
     };
 
     const getColor = (type: string) => {
-        const t = type.toLowerCase();
+        const t = (type || 'info').toLowerCase();
         if (t.includes('emergency') || t.includes('critical')) return COLORS.error;
         if (t.includes('verified') || t.includes('status_update')) return COLORS.primary;
         if (t.includes('resolved') || t.includes('success')) return COLORS.success;
@@ -357,7 +358,9 @@ export default function AlertsScreen() {
                     <RefreshControl refreshing={refreshing} onRefresh={() => fetchNotifications()} colors={[COLORS.primary]} />
                 }
                 ListEmptyComponent={
-                    !loading ? (
+                    loading ? (
+                        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 100 }} />
+                    ) : (
                         <View style={styles.emptyState}>
                             <View style={styles.emptyIconBox}>
                                 <Bell size={48} color={COLORS.textMuted} opacity={0.3} />
@@ -365,7 +368,7 @@ export default function AlertsScreen() {
                             <Text style={styles.emptyTitle}>You're all caught up</Text>
                             <Text style={styles.emptyText}>New safety alerts and emergency updates will appear here.</Text>
                         </View>
-                    ) : null
+                    )
                 }
                 // EXTREME PERFORMANCE PROPS
                 initialNumToRender={10}

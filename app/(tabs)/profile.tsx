@@ -412,7 +412,9 @@ export default function ProfileScreen() {
                                     </TouchableOpacity>
 
                                     <View style={styles.nameContainer}>
-                                        <Text style={[styles.name, { color: COLORS.white }]}>{profile?.full_name || 'Citizen'}</Text>
+                                        <Text style={[styles.name, { color: COLORS.white }]}>
+                                            {loading ? <ActivityIndicator size="small" color={COLORS.white} /> : (profile?.full_name || 'Citizen')}
+                                        </Text>
                                         <View style={styles.badgeRow}>
                                             <View style={[styles.verifiedTag, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
                                                 <Text style={[styles.verifiedText, { color: COLORS.white }]}>VERIFIED CITIZEN</Text>
@@ -426,19 +428,19 @@ export default function ProfileScreen() {
 
                                 <View style={styles.statsGrid}>
                                     <View style={styles.statBox}>
-                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.reports}</Text>
+                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{loading ? <ActivityIndicator size="small" color={COLORS.white} /> : stats.reports}</Text>
                                         <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>REPORTS</Text>
                                     </View>
                                     <View style={[styles.statBorder, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
                                     <View style={styles.statBox}>
-                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.resolved}</Text>
+                                        <Text style={[styles.statNumber, { color: COLORS.white }]}>{loading ? <ActivityIndicator size="small" color={COLORS.white} /> : stats.resolved}</Text>
                                         <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>RESOLVED</Text>
                                     </View>
                                     <View style={[styles.statBorder, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
                                     <View style={styles.statBox}>
                                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                            <Text style={[styles.statNumber, { color: COLORS.white }]}>{stats.score}</Text>
-                                            <TrendingUp size={14} color={COLORS.success} />
+                                            <Text style={[styles.statNumber, { color: COLORS.white }]}>{loading ? <ActivityIndicator size="small" color={COLORS.white} /> : stats.score}</Text>
+                                            {!loading && <TrendingUp size={14} color={COLORS.success} />}
                                         </View>
                                         <Text style={[styles.statLabel, { color: 'rgba(255,255,255,0.7)' }]}>IMPACT SCORE</Text>
                                     </View>

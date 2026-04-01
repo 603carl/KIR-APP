@@ -33,6 +33,12 @@ if (!isExpoGo) {
 LogBox.ignoreLogs(['Reading the project root', 'NativeEventEmitter']);
 
 
+// Configure Sentry User Context
+supabase.auth.onAuthStateChange((event, session) => {
+    // Sentry user context removed
+});
+
+
 export {
     // Catch any errors thrown by the Layout component.
     ErrorBoundary
@@ -219,21 +225,6 @@ export default function RootLayout() {
                 const newBroadcast = payload.new as BroadcastAlert;
                 console.log('[Realtime] New broadcast received:', newBroadcast.title);
                 setActiveBroadcast(newBroadcast);
-            })
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sos_alerts' }, (payload) => {
-                // SOS: Only Watch Command staff see the overlay
-                const sos = payload.new;
-                const isStaff = ['admin', 'responder', 'staff'].includes(userRoleRef.current || '');
-
-                if (sos.status === 'active' && isStaff) {
-                    setActiveBroadcast({
-                        id: sos.id,
-                        title: '🚨 NEARBY SOS EMERGENCY',
-                        message: `Emergency signal detected at ${sos.location_name || 'unknown location'}. WATCH COMMAND ALERT.`,
-                        severity: 'extreme',
-                        created_at: sos.created_at
-                    });
-                }
             })
             .subscribe();
 

@@ -149,6 +149,8 @@ export default function ReportScreen() {
                         title: getCategoryTitle(),
                         category: getCategoryTitle().toLowerCase(), // Match Watch Command enum (water, roads, etc.)
                         description: description.trim(),
+                        severity: severity,
+                        location: locationMethod === 'gps' ? locationName : landmarkName,
                         location_name: locationMethod === 'gps' ? locationName : landmarkName,
                         lat: coords.lat || -1.2921,
                         lng: coords.lng || 36.8219,
@@ -235,7 +237,7 @@ export default function ReportScreen() {
                                     style={[styles.catCard, selectedCat === cat.id && styles.catCardActive]}
                                     onPress={() => {
                                         setSelectedCat(cat.id);
-                                        setTimeout(handleNext, 300);
+                                        setTimeout(handleNext, 50);
                                     }}
                                 >
                                     <View style={[styles.catIconIcon, { backgroundColor: cat.color + '15' }]}>
@@ -360,9 +362,10 @@ export default function ReportScreen() {
                                     onPress={async () => {
                                         const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
                                         if (status === 'granted') {
-                                            const currentLoc = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.High });
-                                            setCoords({ lat: currentLoc.coords.latitude, lng: currentLoc.coords.longitude });
                                             setLocationMethod('gps');
+                                            setLocationName('Acquiring precise location...');
+                                            const currentLoc = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Balanced });
+                                            setCoords({ lat: currentLoc.coords.latitude, lng: currentLoc.coords.longitude });
                                             // Reverse geocode to get location name, county, and sub-county
                                             const rev = await ExpoLocation.reverseGeocodeAsync(currentLoc.coords);
                                             if (rev?.[0]) {
@@ -561,7 +564,7 @@ export default function ReportScreen() {
                     </ScrollView>
 
                     {/* Footer */}
-                    <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 20) + 80 }]}>
+                    <View style={[styles.footer, { paddingBottom: Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : 20 }]}>
                         <TouchableOpacity
                             style={[styles.nextBtn, (isNextDisabled() || isSubmitting) && { opacity: 0.5 }]}
                             onPress={handleNext}

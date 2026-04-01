@@ -261,6 +261,7 @@ export default function SettingsScreen() {
                         </TouchableOpacity>
                     </View>
 
+
                     <View style={styles.footer}>
                         <Text style={styles.versionText}>KIR App Production v2.4.0</Text>
                         <Text style={styles.infoText}>In partnership with Kenya Public Safety Authorities</Text>

@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
         const payload = await req.json();
         console.log('Push Payload Received:', JSON.stringify(payload));
 
-        const { table, record } = payload;
+        const { table, record, type } = payload;
         if (!record) throw new Error("No record found in payload");
 
         // Use service role key for full access to profiles (bypasses RLS)
@@ -49,8 +49,22 @@ Deno.serve(async (req: Request) => {
         const channelId = "emergency-broadcasts-v2";
 
         if (table === 'sos_alerts') {
-            title = "🚨 EMERGENCY SOS";
-            body = `SOS Signal: ${record.location_name || 'Emergency location'}. WATCH COMMAND ONLY ALERT.`;
+            if (type === 'UPDATE') {
+                if (record.status === 'acknowledged') {
+                    title = "🛡️ COMMAND INTERVENTION";
+                    body = "Watch Command has acknowledged your signal. Help is being dispatched.";
+                    sound = "default";
+                } else if (record.status === 'resolved') {
+                    title = "✅ CASE RESOLVED";
+                    body = "Command Center has marked this rescue operation as finalized.";
+                    sound = "default";
+                } else {
+                    return new Response(JSON.stringify({ success: true, reason: "Status update ignored" }));
+                }
+            } else {
+                title = "🚨 EMERGENCY SOS";
+                body = `SOS Signal: ${record.location_name || 'Emergency location'}. WATCH COMMAND ONLY ALERT.`;
+            }
         } else {
             title = `📢 ${record.title || 'Official Broadcast'}`;
             body = record.message || '';
