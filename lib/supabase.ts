@@ -1,26 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-url-polyfill/auto';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-// Reverting to standard SecureStore to rule out issues
-const ExpoSecureStoreAdapter = {
-    getItem: (key: string) => {
-        return SecureStore.getItemAsync(key);
-    },
-    setItem: (key: string, value: string) => {
-        return SecureStore.setItemAsync(key, value);
-    },
-    removeItem: (key: string) => {
-        return SecureStore.deleteItemAsync(key);
-    },
-};
+if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('[Supabase] Missing environment variables. URL or Anon Key is undefined.');
+}
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
     auth: {
-        storage: ExpoSecureStoreAdapter,
+        storage: AsyncStorage,
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
@@ -33,3 +24,4 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
         reconnectAfterMs: (tries: number) => Math.min(tries * 200, 5000),
     },
 });
+

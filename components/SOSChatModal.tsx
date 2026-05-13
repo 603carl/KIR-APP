@@ -12,6 +12,7 @@ import {
     ActivityIndicator,
     Alert,
 } from 'react-native';
+import * as Crypto from 'expo-crypto';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { X, Send, Shield, MessageSquare, AlertCircle } from 'lucide-react-native';
 import { MotiView, AnimatePresence } from 'moti';
@@ -103,7 +104,7 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
             
             // Listen for SOS resolution status
             const statusSub = supabase
-                .channel(`status_monitor:${sosId}`)
+                .channel(`sos_status:${sosId}`)
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sos_alerts', filter: `id=eq.${sosId}` }, (payload) => {
                     const updated = payload.new as any;
                     setSosStatus(updated.status);
@@ -111,7 +112,7 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                 .subscribe();
 
             // 2. Setup Hybrid Channels
-            const channel = supabase.channel(`sos_realtime_link:${sosId}`);
+            const channel = supabase.channel(`sos_chat:${sosId}`);
             
             channel
                 // A. Listen for DB Changes (Reliability)
@@ -167,19 +168,45 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
     }, [isVisible, sosId]);
 
     const handleSendMessage = async () => {
-        if (!newMessage.trim() || !profile) return;
+        if (!newMessage.trim()) return;
+        
+        if (sosId === 'pending') {
+            Alert.alert('Establishing Connection', 'Please wait a moment while we secure your connection to emergency services.');
+            return;
+        }
+
+        let activeProfile = profile;
+        
+        // Safety Fallback: If profile context is stale, try to get fresh session
+        if (!activeProfile) {
+            console.warn('[SOSChat] Profile missing in context, attempting session recovery...');
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) {
+                activeProfile = { id: session.user.id, full_name: 'Citizen' } as any;
+            } else {
+                console.error('[SOSChat] No authenticated session found. Message aborted.');
+                Alert.alert('Session Error', 'Please log in again to send messages.');
+                return;
+            }
+        }
+
+        // Final Type Guard for TypeScript
+        if (!activeProfile) return;
+        const profileInstance = activeProfile;
+
 
         setSending(true);
         const text = newMessage.trim();
-        const msgId = Math.random().toString(36).substring(7);
+        const msgId = Crypto.randomUUID();
         setNewMessage('');
+
 
         const newMsg: Message = {
             id: msgId,
             sos_id: sosId,
             content: text,
             sender_role: 'citizen',
-            sender_name: profile.full_name || 'Citizen',
+            sender_name: profileInstance.full_name || 'Citizen',
             created_at: new Date().toISOString()
         };
 
@@ -187,13 +214,16 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
         setMessages(current => [...current, newMsg]);
 
         try {
+            console.log(`[SOSChat] Transmitting message ${msgId} for SOS ${sosId}`);
+
             // STEP 1: HYBRID BROADCAST (Immediate Fallback)
             if (channelRef.current) {
-                channelRef.current.send({
+                const status = channelRef.current.send({
                     type: 'broadcast',
                     event: 'message',
                     payload: newMsg
                 });
+                console.log('[SOSChat] Broadcast status:', status);
             }
 
             // STEP 2: DB PERSISTENCE (Best-effort for history)
@@ -202,20 +232,25 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                 sos_id: sosId,
                 content: text,
                 sender_role: 'citizen',
-                sender_name: profile.full_name || 'Citizen',
-                sender_id: profile.id
+                sender_name: profileInstance.full_name || 'Citizen',
+                sender_id: profileInstance.id
             });
+
             
             if (error) {
                 console.warn('[SOSChat] DB Persist error:', error.message);
+                // We don't alert here because broadcast might have succeeded
+            } else {
+                console.log('[SOSChat] DB Persist successful');
             }
         } catch (error) {
             console.error('[SOSChat] Transmission Critical Failure:', error);
-            Alert.alert('Signal Critical', 'Failed to transmit signal. Check network.');
+            Alert.alert('Signal Critical', 'Failed to transmit signal. Please check your internet connection and try again.');
         } finally {
             setSending(false);
         }
     };
+
 
     const renderMessage = ({ item }: { item: Message }) => {
         const isMe = item.sender_role === 'citizen';
@@ -315,20 +350,20 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                             <View style={styles.composerWrapper}>
                                 <View style={styles.inputContainer}>
                                     <TextInput
-                                        placeholder={isResolved ? "Chat disabled: Case finalized." : "Transmit message to operator..."}
-                                        style={[styles.input, isResolved && styles.disabledInput]}
+                                        placeholder={isResolved ? "Chat disabled: Case finalized." : sosId === 'pending' ? "Securing connection..." : "Transmit message to operator..."}
+                                        style={[styles.input, (isResolved || sosId === 'pending') && styles.disabledInput]}
                                         value={newMessage}
                                         onChangeText={setNewMessage}
                                         multiline
                                         maxLength={500}
-                                        editable={!isResolved}
+                                        editable={!isResolved && sosId !== 'pending'}
                                     />
                                     <TouchableOpacity
                                         onPress={handleSendMessage}
-                                        disabled={!newMessage.trim() || sending || isResolved}
+                                        disabled={!newMessage.trim() || sending || isResolved || sosId === 'pending'}
                                         style={[
                                             styles.sendBtn,
-                                            (!newMessage.trim() || sending || isResolved) && styles.sendBtnDisabled
+                                            (!newMessage.trim() || sending || isResolved || sosId === 'pending') && styles.sendBtnDisabled
                                         ]}
                                     >
                                         {sending ? (
@@ -337,6 +372,7 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                                             <Send size={20} color={COLORS.white} />
                                         )}
                                     </TouchableOpacity>
+
                                 </View>
                                 <View style={styles.safetyNotice}>
                                     <Shield size={10} color={COLORS.textSecondary} />

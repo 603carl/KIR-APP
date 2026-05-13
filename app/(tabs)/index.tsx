@@ -169,7 +169,7 @@ export default function DashboardScreen() {
         { event: 'UPDATE', schema: 'public', table: 'sos_alerts', filter: `id=eq.${sosId}` },
         (payload) => {
           const updated = payload.new as any;
-          if (['resolved', 'cancelled', 'acknowledged'].includes(updated.status)) {
+          if (['resolved', 'cancelled'].includes(updated.status)) {
             setSosActive(false);
             setActiveSosId(null);
             setUnreadCount(0);
@@ -265,33 +265,41 @@ export default function DashboardScreen() {
     };
   }, [attachSosListeners, clearSosListeners]); // STABLE — no dependencies, channels stay alive
 
-  // 2. Fetch incidents when query/category/location changes
+  // 2. Fetch incidents (Debounced Search)
   useEffect(() => {
-    fetchIncidents();
-  }, [searchQuery, selectedCategory, userLocation]);
+    const delayDebounceFn = setTimeout(() => {
+      fetchIncidents();
+    }, 400);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery, selectedCategory]);
 
   const fetchUser = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    cachedUser.current = user;
+      cachedUser.current = user;
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('full_name')
-      .eq('id', user.id)
-      .single();
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single();
 
-    if (profile?.full_name && profile.full_name !== 'Citizen') {
-      setUserName(profile.full_name.split(' ')[0]);
-    } else {
-      const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
-      setUserName(fullName.split(' ')[0]);
-    }
+      if (profile?.full_name && profile.full_name !== 'Citizen') {
+        const namePart = profile.full_name.split(' ')[0];
+        setUserName(namePart);
+      } else {
+        const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
+        setUserName(fullName.split(' ')[0]);
+      }
+    } catch (e) { }
   };
 
   const fetchStats = async () => {
     try {
+      // Use head:true for fast count queries
       const { count: total } = await supabase.from('incidents').select('*', { count: 'exact', head: true });
       const { count: resolved } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).in('status', ['Resolved', 'Closed', 'resolved', 'closed']);
 
@@ -303,9 +311,7 @@ export default function DashboardScreen() {
         setStats(newStats);
         AsyncStorage.setItem(CACHE_KEY_STATS, JSON.stringify(newStats));
       }
-    } catch (e) {
-      console.error('Stats error:', e);
-    }
+    } catch (e) { }
   };
 
   const checkLocationPermission = async () => {
@@ -313,17 +319,13 @@ export default function DashboardScreen() {
     isRequestingLocation.current = true;
     try {
       const { status: currentStatus } = await Location.getForegroundPermissionsAsync();
-      let finalStatus = currentStatus;
-      if (currentStatus !== 'granted') {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        finalStatus = status;
-      }
-      if (finalStatus === 'granted') {
+      if (currentStatus === 'granted') {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setUserLocation(loc);
+        // Only fetch if we didn't have location before
+        if (!userLocation) fetchIncidents();
       }
     } catch (e) {
-      console.log('Location check failed', e);
     } finally {
       isRequestingLocation.current = false;
     }
@@ -331,8 +333,11 @@ export default function DashboardScreen() {
 
   const fetchIncidents = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Use ref to avoid multiple auth calls
+      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
       if (!user) return;
+      if (!cachedUser.current) cachedUser.current = user;
+
       const lat = userLocation?.coords.latitude || null;
       const lng = userLocation?.coords.longitude || null;
 
@@ -341,7 +346,7 @@ export default function DashboardScreen() {
           target_user_id: user.id,
           user_lat: lat,
           user_lng: lng,
-          search_query: searchQuery || null,
+          search_query: searchQuery.trim() || null,
           selected_cat: selectedCategory || null
         });
 
@@ -351,7 +356,6 @@ export default function DashboardScreen() {
         AsyncStorage.setItem(CACHE_KEY_INCIDENTS, JSON.stringify(data || []));
       }
     } catch (error) {
-      console.error('Smart Feed error:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -375,11 +379,13 @@ export default function DashboardScreen() {
     return past.toLocaleDateString();
   };
 
+  const [isSosThrottled, setIsSosThrottled] = useState(false);
+  const sosThrottleRef = useRef<NodeJS.Timeout | null>(null);
+
   const cancelSOS = useCallback(async () => {
     if (!activeSosId) return;
 
-    // INSTANT CANCEL — no dialog, no delay
-    const cancellingId = activeSosId;
+    const currentId = activeSosId;
 
     // 1. Reset local state IMMEDIATELY for instant UI feedback
     setSosActive(false);
@@ -389,115 +395,139 @@ export default function DashboardScreen() {
     clearSosListeners();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
+    // If still in 'pending' state, no DB entry exists to cancel yet
+    if (currentId === 'pending') {
+      console.log('[SOS] Cancelled before DB link was established.');
+      return;
+    }
+
     try {
       const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
 
-      // 2. Update SOS status to cancelled in DB
-      const { error: updateError } = await supabase
+      // 2. Update SOS status to cancelled in DB (Only for real UUID)
+      await supabase
         .from('sos_alerts')
         .update({
           status: 'cancelled',
           resolved_at: new Date().toISOString(),
         })
-        .eq('id', cancellingId);
-
-      if (updateError) throw updateError;
+        .eq('id', currentId);
 
       // 3. Send a system message so Watch Command knows
       await supabase.from('sos_messages').insert({
-        sos_id: cancellingId,
+        sos_id: currentId,
         content: '⚠️ SOS has been cancelled by the citizen.',
         sender_role: 'citizen',
         sender_name: userName || 'Citizen',
         sender_id: user?.id || null,
       });
     } catch (error) {
-      console.error('SOS Cancel Error:', error);
-      Alert.alert('Cancel Failed', 'Could not sync cancellation. Please check your connection.');
+      console.error('SOS Cancel Sync Error:', error);
     }
-  }, [activeSosId, userName]);
+  }, [activeSosId, userName, clearSosListeners]);
 
   const handleSOS = useCallback(async () => {
+    if (isSosThrottled) {
+      Alert.alert('Cooling Down', 'Emergency protocols are preparing. Please wait a few seconds before triggering again.');
+      return;
+    }
+
     if (sosActive) {
-      // INSTANT CANCEL — one tap to deactivate
       cancelSOS();
+      setIsSosThrottled(true);
+      if (sosThrottleRef.current) clearTimeout(sosThrottleRef.current);
+      sosThrottleRef.current = setTimeout(() => setIsSosThrottled(false), 10000);
       return;
     }
 
     // 1. FAST TRIGGER (UI FEEDBACK)
     setSosActive(true);
-    setActiveSosId(null); // Wait for real ID
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-    try {
-      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
-      if (!user) {
-        setSosActive(false);
-        Alert.alert('Authentication Error', 'Please login to trigger emergency protocols.');
-        return;
-      }
-
-      // HIGH ACCURACY FETCH (FRESH)
-      let finalLat = -1.2921;
-      let finalLng = 36.8219;
-      
+    setActiveSosId('pending'); 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    
+    (async () => {
+      let currentSosId: string | null = null;
       try {
-        const freshLoc = await Location.getCurrentPositionAsync({ 
-          accuracy: Location.Accuracy.BestForNavigation
-        });
-        finalLat = freshLoc.coords.latitude;
-        finalLng = freshLoc.coords.longitude;
-        setUserLocation(freshLoc);
-      } catch (e) {
-        console.warn('High accuracy fetch failed, using state/default', e);
-        if (userLocation) {
-          finalLat = userLocation.coords.latitude;
-          finalLng = userLocation.coords.longitude;
+        const startTime = Date.now();
+        
+        // Use getSession for instant ID retrieval (no network call if alive)
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
+        
+        if (!user) {
+            // Fallback to network if session is empty, but this shouldn't happen if they are on dashboard
+            const { data: { user: networkUser } } = await supabase.auth.getUser();
+            if (!networkUser) throw new Error('No user found');
         }
-      }
 
-      const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
-        user_id: user.id,
-        lat: finalLat,
-        lng: finalLng,
-        location_name: 'Locating...',
-        status: 'active'
-      }).select().single();
+        const userId = user?.id || (await supabase.auth.getUser()).data.user?.id;
+        if (!userId) throw new Error('Failed to resolve User ID');
 
-      if (sosError) throw sosError;
-      
-      // Update with REAL ID once DB confirms
-      setActiveSosId(sosData.id);
-      
-      // CRITICAL BUG FIX: Attach listeners immediately for NEW sessions!
-      attachSosListeners(sosData.id);
+        // 2. STAGE 1: SHOTGUN INSERT (Instant)
+        // We use low-accuracy coords if available to avoid waiting for GPS
+        const initialLat = userLocation?.coords.latitude || -1.2921;
+        const initialLng = userLocation?.coords.longitude || 36.8219;
 
-      // Async location enrichment
-      (async () => {
-        try {
-          const results = await Location.reverseGeocodeAsync({ latitude: finalLat, longitude: finalLng });
-          if (results && results[0]) {
-            const loc = results[0];
-            const address = [loc.street, loc.district, loc.name].filter(Boolean).join(', ');
-            const county = normalizeCounty(loc.region || loc.city || '');
-            await supabase.from('sos_alerts').update({ location_name: address, county }).eq('id', sosData.id);
+        const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
+          user_id: userId,
+          lat: initialLat,
+          lng: initialLng,
+          location_name: 'Locating...',
+          status: 'active'
+        }).select().single();
+
+        if (sosError) throw sosError;
+        
+        currentSosId = sosData.id;
+        setActiveSosId(sosData.id);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        console.log(`[SOS] Shotgun transmitted in ${Date.now() - startTime}ms`);
+
+        // 3. STAGE 2 & 3: BACKGROUND REFINEMENT (Non-blocking)
+        (async () => {
+          try {
+            // A. Precision GPS (Wait up to 10s only)
+            const freshLoc = await Location.getCurrentPositionAsync({ 
+                accuracy: Location.Accuracy.Balanced,
+            });
+            setUserLocation(freshLoc);
+            
+            // B. Reverse Geocode
+            const geoRes = await Location.reverseGeocodeAsync(freshLoc.coords);
+            const address = geoRes?.[0] ? [geoRes[0].street, geoRes[0].district, geoRes[0].name].filter(Boolean).join(', ') : 'Kenya';
+            const county = normalizeCounty(geoRes?.[0]?.region || geoRes?.[0]?.city || '');
+
+            // C. Final Sync
+            await supabase.from('sos_alerts').update({
+              lat: freshLoc.coords.latitude,
+              lng: freshLoc.coords.longitude,
+              location_name: address,
+              county
+            }).eq('id', sosData.id);
+
+            // D. System Alert for Dashboard
             await supabase.from('alerts').insert({
               rule_name: 'SOS EMERGENCY',
-              message: `CRITICAL: SOS from user at ${address}`,
+              message: `CRITICAL: SOS at ${address}`,
               severity: 'critical',
-              user_id: user.id,
+              user_id: userId,
               sos_alert_id: sosData.id
             });
+            
+            console.log('[SOS] Accuracy enrichment complete');
+          } catch (enrichError) {
+            console.warn('[SOS] Enrichment failed:', enrichError);
           }
-        } catch (e) { console.warn('SOS enrichment fail', e); }
-      })();
-    } catch (error) {
-      console.error('SOS FAILED:', error);
-      setSosActive(false);
-      setActiveSosId(null);
-      Alert.alert('SOS Failure', 'System link error. Please call 999.');
-    }
-  }, [sosActive, userLocation, userName, cancelSOS]);
+        })();
+      } catch (error) {
+        console.error('[SOS] Terminal Failure:', error);
+        setSosActive(false);
+        setActiveSosId(null);
+        Alert.alert('SOS Failure', 'System link error. Please call emergency services.');
+      }
+    })();
+
+  }, [sosActive, isSosThrottled, userLocation, cancelSOS]);
 
   return (
     <View style={styles.container}>

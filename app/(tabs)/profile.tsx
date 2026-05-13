@@ -23,7 +23,7 @@ import {
 } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { MotiView } from 'moti';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -75,7 +75,7 @@ export default function ProfileScreen() {
         fetchProfile();
         checkBiometrics();
         setupNotifications();
-    }, []);
+    }, [fetchProfile]);
 
     const checkBiometrics = async () => {
         const compatible = await LocalAuthentication.hasHardwareAsync();
@@ -102,7 +102,7 @@ export default function ProfileScreen() {
         return result.success;
     };
 
-    const fetchProfile = async () => {
+    const fetchProfile = useCallback(async () => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session?.user) {
@@ -112,7 +112,7 @@ export default function ProfileScreen() {
 
             const userId = session.user.id;
 
-            // Fetch all data in parallel
+            // Fetch all data in parallel with robust error suppression
             const [profileRes, reportsRes, resolvedRes, verifyRes, iqRes] = await Promise.allSettled([
                 supabase.from('profiles').select('*').eq('id', userId).single(),
                 supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId),
@@ -121,7 +121,7 @@ export default function ProfileScreen() {
                 supabase.rpc('get_user_civic_intelligence', { target_user_id: userId })
             ]);
 
-            // Handle Profile Data
+            // 1. Handle Profile Data (Crucial)
             if (profileRes.status === 'fulfilled' && profileRes.value.data) {
                 const profileData = profileRes.value.data;
                 setProfile(profileData);
@@ -132,28 +132,15 @@ export default function ProfileScreen() {
                 setEmergencyName(profileData.emergency_contact_name || '');
                 setEmergencyPhone(profileData.emergency_contact_phone || '');
                 setMedicalConditions(profileData.medical_conditions || '');
-            } else {
-                console.log('Profile missing or error in fetch, attempting sync...');
-                // Safety: Create missing profile if authenticated
-                const fullName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || 'Citizen';
-                const avatarUrl = session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || null;
-
-                const { data: newProfile, error: createError } = await supabase.from('profiles').upsert({
-                    id: userId,
-                    full_name: fullName,
-                    email: session.user.email,
-                    avatar_url: avatarUrl,
-                    role: 'reporter'
-                }).select().single();
-
-                if (!createError && newProfile) {
-                    setProfile(newProfile);
-                    setEditName(newProfile.full_name || '');
-                }
+            } else if (session.user) {
+                // Fallback: Use session metadata if profile fetch fails
+                const fullName = session.user.user_metadata?.full_name || 'Citizen';
+                setProfile({ full_name: fullName, id: userId });
+                setEditName(fullName);
             }
 
-            // Handle Stats & Civic IQ
-            const iq = (iqRes.status === 'fulfilled' ? iqRes.value.data?.[0] : {}) || {};
+            // 2. Handle Stats (Resilient)
+            const iq = iqRes.status === 'fulfilled' ? (iqRes.value.data?.[0] || {}) : {};
             setStats({
                 reports: reportsRes.status === 'fulfilled' ? reportsRes.value.count || 0 : 0,
                 resolved: resolvedRes.status === 'fulfilled' ? resolvedRes.value.count || 0 : 0,
@@ -166,25 +153,30 @@ export default function ProfileScreen() {
             });
 
         } catch (error: any) {
-            console.error('Profile fetch error:', error);
-            if (error.message?.includes('JWT')) {
+            console.error('[Profile] Global fetch error:', error);
+            if (error.message?.includes('JWT') || error.status === 401) {
                 router.replace('/auth/login');
             }
         } finally {
             setLoading(false);
         }
-    };
+    }, [router]);
+
 
     const pickAvatar = async () => {
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.5,
-        });
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.5,
+            });
 
-        if (!result.canceled) {
-            uploadAvatar(result.assets[0].uri);
+            if (!result.canceled && result.assets?.[0]) {
+                uploadAvatar(result.assets[0].uri);
+            }
+        } catch (e) {
+            Alert.alert('Permission Denied', 'Please allow access to your photos to update your profile picture.');
         }
     };
 
@@ -192,19 +184,17 @@ export default function ProfileScreen() {
         setUploading(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            if (!user) throw new Error('Not authenticated');
 
-            const fileName = `${user.id}-${Date.now()}.jpg`;
-            const formData = new FormData();
-            formData.append('file', {
-                uri,
-                name: fileName,
-                type: 'image/jpeg',
-            } as any);
+            const fileName = `avatars/${user.id}/${Date.now()}.jpg`;
+            
+            // Note: In some Expo versions, fetching the blob is more reliable for Supabase uploads
+            const response = await fetch(uri);
+            const blob = await response.blob();
 
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(fileName, formData);
+                .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
 
             if (uploadError) throw uploadError;
 
@@ -218,38 +208,44 @@ export default function ProfileScreen() {
                 .eq('id', user.id);
 
             if (updateError) throw updateError;
-            setProfile({ ...profile, avatar_url: publicUrl });
+            setProfile((prev: any) => ({ ...prev, avatar_url: publicUrl }));
             Alert.alert('Success', 'Profile picture updated!');
 
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to upload avatar');
+            console.error('[Avatar] Upload Error:', error);
+            Alert.alert('Upload Failed', error.message || 'Check your internet connection');
         } finally {
             setUploading(false);
         }
     };
 
     const handleUpdateProfile = async () => {
+        if (!editName.trim()) {
+            Alert.alert('Required Field', 'Please enter your full name.');
+            return;
+        }
         setSaving(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            if (!user) throw new Error('Session expired');
 
             const { error } = await supabase
                 .from('profiles')
                 .update({
-                    full_name: editName,
-                    bio: editBio,
-                    location_name: editLocation,
-                    blood_group: bloodGroup,
-                    emergency_contact_name: emergencyName,
-                    emergency_contact_phone: emergencyPhone,
-                    medical_conditions: medicalConditions,
+                    full_name: editName.trim(),
+                    bio: editBio.trim(),
+                    location_name: editLocation.trim(),
+                    blood_group: bloodGroup.trim(),
+                    emergency_contact_name: emergencyName.trim(),
+                    emergency_contact_phone: emergencyPhone.trim(),
+                    medical_conditions: medicalConditions.trim(),
                 })
                 .eq('id', user.id);
 
             if (error) throw error;
-            setProfile({
-                ...profile,
+            
+            setProfile((prev: any) => ({
+                ...prev,
                 full_name: editName,
                 bio: editBio,
                 location_name: editLocation,
@@ -257,11 +253,12 @@ export default function ProfileScreen() {
                 emergency_contact_name: emergencyName,
                 emergency_contact_phone: emergencyPhone,
                 medical_conditions: medicalConditions
-            });
+            }));
+            
             setEditModalVisible(false);
-            Alert.alert('Success', 'Profile updated successfully!');
+            Alert.alert('Profile Saved', 'Your changes have been synchronized.');
         } catch (error: any) {
-            Alert.alert('Error', error.message);
+            Alert.alert('Update Failed', error.message);
         } finally {
             setSaving(false);
         }
@@ -283,7 +280,7 @@ export default function ProfileScreen() {
 
             if (error) throw error;
             if (profile) {
-                setProfile({ ...profile, [field]: newPrefs });
+                setProfile((prev: any) => ({ ...prev, [field]: newPrefs }));
             }
         } catch (error: any) {
             console.error('Update preferences error:', error);
@@ -352,7 +349,7 @@ export default function ProfileScreen() {
     };
 
     const MenuItem = ({ icon: Icon, title, subtitle, onPress, showSwitch, value, onValueChange, iconColor = COLORS.primary, iconBg = '#F8F9FA' }: any) => (
-        <TouchableOpacity style={styles.menuItem} onPress={onPress}>
+        <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.7}>
             <View style={[styles.menuIconContainer, { backgroundColor: iconBg }]}>
                 <Icon size={20} color={iconColor} />
             </View>
@@ -582,7 +579,7 @@ export default function ProfileScreen() {
                                     ]
                                 );
                             }}
-                            activeOpacity={0.7}
+                            activeOpacity={0.6}
                         >
                             <View style={[styles.menuIconContainer, { backgroundColor: '#FEF2F2' }]}>
                                 <Trash2 size={20} color="#E11D48" />

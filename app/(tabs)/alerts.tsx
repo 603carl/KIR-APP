@@ -49,6 +49,7 @@ interface Notification {
     is_read: boolean;
     created_at: string;
     payload?: any;
+    isBroadcast?: boolean;
 }
 
 const getIncidentIdFromPayload = (payload: any, body: string, id: string) => {
@@ -198,20 +199,85 @@ export default function AlertsScreen() {
     const fetchNotifications = useCallback(async (isSilent = false) => {
         if (!isSilent) setLoading(true);
         try {
-            const { data, error } = await supabase
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            // 1. Fetch install date & filters
+            const [installDate, storedAck, storedDel] = await Promise.all([
+                SecureStore.getItemAsync('install_date'),
+                SecureStore.getItemAsync('acknowledged_broadcasts'),
+                SecureStore.getItemAsync('deleted_notifications')
+            ]);
+            
+            // We only show alerts since install, but we also prune to "Latest" (last 7 days for read ones)
+            const installDateObj = installDate ? new Date(installDate) : new Date(user.created_at);
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            
+            // Use the more recent of (install date, 7 days ago) as our history threshold
+            const historyThreshold = installDateObj > sevenDaysAgo ? installDateObj : sevenDaysAgo;
+            const thresholdISO = historyThreshold.toISOString();
+
+            const acknowledgedIds: string[] = storedAck ? JSON.parse(storedAck) : [];
+            const deletedIds: string[] = storedDel ? JSON.parse(storedDel) : [];
+
+            // 2. Fetch Personal Notifications
+            // Logic: ONLY fetch notifications since the history threshold (strict 7 days)
+            const { data: personalData, error: personalError } = await supabase
                 .from('notifications')
                 .select('*')
+                .eq('user_id', user.id)
+                .gt('created_at', thresholdISO)
                 .order('created_at', { ascending: false })
                 .limit(50);
 
-            if (error) throw error;
-            setNotifications(data || []);
+            if (personalError) throw personalError;
+
+            // 3. Fetch Global Broadcasts
+            // Since broadcasts are global, we filter them locally for unread status, 
+            // but we limit the fetch to the history threshold to keep it "Latest"
+            const { data: broadcastData, error: broadcastError } = await supabase
+                .from('broadcasts')
+                .select('*')
+                .gt('created_at', thresholdISO)
+                .order('created_at', { ascending: false })
+                .limit(50);
+
+            if (broadcastError) throw broadcastError;
+
+            // 4. Map and Merge
+            const mappedNotifications: Notification[] = (personalData || [])
+                .filter(n => !deletedIds.includes(n.id))
+                .map(n => ({
+                    ...n,
+                    isBroadcast: false
+                }));
+
+            const mappedBroadcasts: Notification[] = (broadcastData || [])
+                .filter(b => !deletedIds.includes(b.id))
+                .map(b => ({
+                    id: b.id,
+                    title: b.title,
+                    body: b.message,
+                    type: 'broadcast',
+                    is_read: acknowledgedIds.includes(b.id),
+                    created_at: b.created_at,
+                    isBroadcast: true,
+                    payload: { severity: b.severity }
+                }));
+
+            const merged = [...mappedNotifications, ...mappedBroadcasts].sort(
+                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+
+            setNotifications(merged);
             
-            // Sync with SecureStore unread count
-            const unreadCount = data?.filter(n => !n.is_read).length || 0;
+            // 5. Sync Unread Count to SecureStore (for TabLayout)
+            const unreadCount = merged.filter(n => !n.is_read).length;
             await SecureStore.setItemAsync('unread_alerts_count', unreadCount.toString());
+            
         } catch (error) {
-            console.error('Fetch error:', error);
+            console.error('[Alerts] Fetch error:', error);
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -221,10 +287,13 @@ export default function AlertsScreen() {
     useEffect(() => {
         fetchNotifications();
         
-        // Real-time synchronization for instant updates
+        // Comprehensive sync for both types
         const channel = supabase
-            .channel('alerts-sync')
+            .channel('alerts-screen-sync')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
+                fetchNotifications(true);
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
                 fetchNotifications(true);
             })
             .subscribe();
@@ -235,44 +304,76 @@ export default function AlertsScreen() {
     const clearAllNotifications = async () => {
         try {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            
-            // Optimistic clear
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             const userRef = (await supabase.auth.getUser()).data.user?.id;
             if (!userRef) return;
 
-            setNotifications([]);
-            await SecureStore.setItemAsync('unread_alerts_count', '0');
+            // Optimistic clear
+            const idsToClear = notifications.map(n => n.id);
+            if (idsToClear.length === 0) return;
 
-            const { error } = await supabase
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            
+            // 1. Delete ALL personal notifications from DB (Total Purge)
+            await supabase
                 .from('notifications')
                 .delete()
                 .eq('user_id', userRef);
 
-            if (error) throw error;
+            // 2. Track all cleared IDs as deleted locally so they don't reappear
+            const storedDel = await SecureStore.getItemAsync('deleted_notifications');
+            const previouslyDeleted = storedDel ? JSON.parse(storedDel) : [];
+            const newDeleted = Array.from(new Set([...previouslyDeleted, ...idsToClear]));
+            await SecureStore.setItemAsync('deleted_notifications', JSON.stringify(newDeleted));
+
+            // 3. Update local state
+            setNotifications([]);
+            await SecureStore.setItemAsync('unread_alerts_count', '0');
+            
+            // Trigger badge refresh in TabLayout
+            supabase.channel('notification-sync').send({
+                type: 'broadcast',
+                event: 'refresh-unread-count'
+            });
+
         } catch (error) {
             console.error('Error clearing notifications:', error);
             fetchNotifications(true);
         }
     };
 
-    const deleteNotification = async (id: string) => {
+    const deleteNotification = async (notif: Notification) => {
         try {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             
             // Optimistic removal
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            setNotifications(prev => prev.filter(n => n.id !== id));
+            setNotifications(prev => prev.filter(n => n.id !== notif.id));
 
-            const { error } = await supabase
-                .from('notifications')
-                .delete()
-                .eq('id', id);
+            // Track deleted ID locally so it doesn't reappear
+            const storedDel = await SecureStore.getItemAsync('deleted_notifications');
+            const deleted = storedDel ? JSON.parse(storedDel) : [];
+            await SecureStore.setItemAsync('deleted_notifications', JSON.stringify([...deleted, notif.id]));
 
-            if (error) throw error;
+            if (!notif.isBroadcast) {
+                // Also delete from DB for personal notifications
+                await supabase.from('notifications').delete().eq('id', notif.id);
+            }
+            
+            // Decrement badge count
+            if (!notif.is_read) {
+                const countStr = await SecureStore.getItemAsync('unread_alerts_count');
+                const count = Math.max(0, parseInt(countStr || '0') - 1);
+                await SecureStore.setItemAsync('unread_alerts_count', count.toString());
+                
+                supabase.channel('notification-sync').send({
+                    type: 'broadcast',
+                    event: 'refresh-unread-count'
+                });
+            }
+
         } catch (error) {
             console.error('Delete error:', error);
-            fetchNotifications(true); // Rollback on error
+            fetchNotifications(true);
         }
     };
 
@@ -310,20 +411,40 @@ export default function AlertsScreen() {
     const renderItem = useCallback(({ item }: { item: Notification }) => (
         <SwipeableNotification
             notification={item}
-            onPress={() => {
-                const targetId = getIncidentIdFromPayload(item.payload, item.body, item.id);
-                if (targetId) {
-                    router.push(`/incident/${targetId}` as any);
-                } else {
-                    Alert.alert("Notice", "This notification doesn't have a linked incident report.");
+            onPress={async () => {
+                // Mark as read/acknowledged
+                if (!item.is_read) {
+                    if (item.isBroadcast) {
+                        const storedAck = await SecureStore.getItemAsync('acknowledged_broadcasts');
+                        const acknowledged = storedAck ? JSON.parse(storedAck) : [];
+                        await SecureStore.setItemAsync('acknowledged_broadcasts', JSON.stringify([...acknowledged, item.id]));
+                    } else {
+                        await supabase.from('notifications').update({ is_read: true }).eq('id', item.id);
+                    }
+                    
+                    // Trigger badge refresh in TabLayout
+                    supabase.channel('notification-sync').send({
+                        type: 'broadcast',
+                        event: 'refresh-unread-count'
+                    });
+
+                    fetchNotifications(true);
+                }
+
+
+                if (!item.isBroadcast) {
+                    const targetId = getIncidentIdFromPayload(item.payload, item.body, item.id);
+                    if (targetId) {
+                        router.push(`/incident/${targetId}` as any);
+                    }
                 }
             }}
-            onDelete={() => deleteNotification(item.id)}
+            onDelete={() => deleteNotification(item)}
             getIcon={getIcon}
             getColor={getColor}
             getTimeAgo={getTimeAgo}
         />
-    ), []);
+    ), [notifications]);
 
     const keyExtractor = useCallback((item: Notification) => item.id, []);
 

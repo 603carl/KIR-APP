@@ -57,37 +57,39 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     fetchProfile();
 
-    // Listen for Auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN') {
-        fetchProfile();
-      } else if (event === 'SIGNED_OUT') {
-        setProfile(null);
-      }
+    const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            fetchProfile();
+        } else if (event === 'SIGNED_OUT') {
+            setProfile(null);
+        }
     });
 
-    // Real-time synchronization
     let profileSubscription: any = null;
     
     supabase.auth.getSession().then(({ data: { session } }) => {
         if (session?.user) {
             profileSubscription = supabase
-                .channel(`profile:${session.user.id}`)
+                .channel(`profile_sync:${session.user.id}`)
                 .on(
                     'postgres_changes',
                     {
-                        event: '*',
+                        event: 'UPDATE',
                         schema: 'public',
                         table: 'profiles',
                         filter: `id=eq.${session.user.id}`
                     },
-                    (payload: RealtimePostgresChangesPayload<any>) => {
+                    (payload) => {
                         if (payload.new) {
-                            setProfile(prev => ({
-                                ...prev,
-                                ...payload.new,
-                                id: payload.new.id // Ensure ID persists
-                            }));
+                            setProfile(prev => {
+                                if (!prev) return null;
+                                return {
+                                    ...prev,
+                                    ...payload.new,
+                                    id: payload.new.id || prev.id,
+                                    full_name: payload.new.full_name || prev.full_name
+                                } as Profile;
+                            });
                         }
                     }
                 )
@@ -96,10 +98,11 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     return () => {
-      subscription.unsubscribe();
+      authSubscription.unsubscribe();
       if (profileSubscription) supabase.removeChannel(profileSubscription);
     };
   }, [fetchProfile]);
+
 
   return (
     <ProfileContext.Provider value={{ profile, loading, refreshProfile: fetchProfile }}>

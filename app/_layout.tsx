@@ -90,7 +90,8 @@ export default function RootLayout() {
     const userRoleRef = useRef<string | null>(null);
     const appState = useRef(AppState.currentState);
     const lastBackgroundTime = useRef<number | null>(null);
-    const autoSignOutTimeout = useRef<number>(30); // Default 30s
+    const autoSignOutTimeout = useRef<number>(1800); // 30 minutes for production stability
+
 
     // ─── Push Notification Handler (SINGLE instance) ─────────────────
     // When a broadcast push is received or tapped, this triggers the overlay
@@ -129,33 +130,52 @@ export default function RootLayout() {
 
             try {
                 // 1. Determine Initial Route & Data in Parallel
-                const [sessionRes, hasSeenOnboarding, installDate] = await Promise.all([
+                const [sessionRes, hasSeenOnboarding, installDate, lastAppVersion] = await Promise.all([
                     supabase.auth.getSession(),
                     SecureStore.getItemAsync('hasSeenOnboarding'),
-                    SecureStore.getItemAsync('install_date')
+                    SecureStore.getItemAsync('install_date'),
+                    SecureStore.getItemAsync('app_version')
                 ]);
 
                 const session = sessionRes.data.session;
+                const currentVersion = Constants.expoConfig?.version || '1.0.0';
 
                 // 2. Set Install Date if missing
                 if (!installDate) {
                     const now = new Date().toISOString();
                     await SecureStore.setItemAsync('install_date', now);
+                    await SecureStore.setItemAsync('app_version', currentVersion);
                 }
 
-                // 3. Routing Logic
+                // 3. Update Force-Logout Check: If version changed and not new install, clear session
+                if (lastAppVersion && lastAppVersion !== currentVersion && hasSeenOnboarding) {
+                    console.log(`[Update] Version mismatch (${lastAppVersion} -> ${currentVersion}). Clearing session.`);
+                    // Only attempt signOut if we actually have a session
+                    if (session) {
+                        try {
+                            await supabase.auth.signOut();
+                        } catch (signOutError) {
+                            console.warn('[Update] Initial signOut failed (likely expired), proceeding with local clear.', signOutError);
+                        }
+                    }
+                    await SecureStore.setItemAsync('app_version', currentVersion);
+                    setPendingRedirect('/auth/login');
+                    return;
+                }
+
+                // 4. Routing Logic
                 const inAuthGroup = segments[0] === 'auth';
                 const inOnboarding = segments[0] === 'onboarding';
 
                 if (!hasSeenOnboarding && !inOnboarding) {
                     setPendingRedirect('/onboarding');
-                } else if (hasSeenOnboarding && !session && !inAuthGroup && !inOnboarding) {
+                } else if (!session && !inAuthGroup && !inOnboarding) {
                     setPendingRedirect('/auth/login');
                 } else if (session && (inAuthGroup || inOnboarding)) {
                     setPendingRedirect('/(tabs)');
                 }
 
-                // 4. Biometric Lock & Android 14+ Ready Check
+                // 5. Biometric Lock & Android 14+ Ready Check
                 if (session?.user) {
                     // Android 14+: Check FSI permission and prompt if needed
                     if (Platform.OS === 'android' && Platform.Version >= 34) {
@@ -172,8 +192,6 @@ export default function RootLayout() {
                     await SplashScreen.hideAsync().catch(() => { });
 
                     // ─── Cold Start Broadcast Check ──────────────────
-                    // If the app was killed and user tapped a broadcast notification
-                    // to relaunch it, catch that here and show the overlay immediately.
                     if (Notifications) {
                         try {
                             const lastResponse = await Notifications.getLastNotificationResponseAsync();
@@ -221,35 +239,25 @@ export default function RootLayout() {
         const broadcastSubscription = supabase
             .channel('global:emergency_sync')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
-                // Broadcast from Watch Command → triggers phone takeover for ALL users
                 const newBroadcast = payload.new as BroadcastAlert;
                 console.log('[Realtime] New broadcast received:', newBroadcast.title);
                 setActiveBroadcast(newBroadcast);
             })
             .subscribe();
 
-        // ─── Auth State Listener ─────────────────────────────────────
+        // ─── Auth State Listener (Simplified to prevent loops) ─────────
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_IN') {
-                router.replace('/(tabs)');
-                if (session?.user) {
-                    supabase.from('profiles')
-                        .select('role, privacy_settings')
-                        .eq('id', session.user.id)
-                        .single()
-                        .then(({ data }) => {
-                            if (data) {
-                                userRoleRef.current = data.role || 'reporter';
-                                if (data.privacy_settings?.auto_sign_out_timeout !== undefined) {
-                                    autoSignOutTimeout.current = data.privacy_settings.auto_sign_out_timeout;
-                                }
-                            }
-                        });
-                }
-            } else if (event === 'SIGNED_OUT') {
+            console.log(`[Auth] Event: ${event}`);
+            if (event === 'SIGNED_OUT') {
                 router.replace('/auth/login');
+            } else if (event === 'SIGNED_IN') {
+                // Check if already in tabs before replacing
+                if (segments[0] !== '(tabs)') {
+                    router.replace('/(tabs)');
+                }
             }
         });
+
 
         // ─── App State Listener for Auto Sign-Out ────────────────────
         const handleAppStateChange = async (nextAppState: any) => {

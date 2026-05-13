@@ -236,15 +236,25 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             }
 
             if (token || location) {
-                const { data: { user } } = await supabase.auth.getUser();
-                if (user) {
-                    await supabase.rpc('sync_user_profile_data', {
-                        p_lat: location?.coords.latitude || null,
-                        p_lng: location?.coords.longitude || null,
-                        p_push_token: token || null
-                    });
+                try {
+                    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+                    if (sessionError) {
+                        console.warn('[Push] Session error during sync:', sessionError.message);
+                        return;
+                    }
+                    if (session?.user) {
+                        const { error: rpcError } = await supabase.rpc('sync_user_profile_data', {
+                            p_lat: location?.coords.latitude || null,
+                            p_lng: location?.coords.longitude || null,
+                            p_push_token: token || null
+                        });
+                        if (rpcError) console.warn('[Push] RPC Sync error:', rpcError.message);
+                    }
+                } catch (err) {
+                    console.log('[Push] Critical sync failure:', err);
                 }
             }
+
         };
 
         syncToken();

@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AlertCircle, CheckCircle2, ChevronRight, Clock, Filter, MapPin, Search } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1542013936693-884638332954?q=80&w=400&auto=format&fit=crop';
@@ -13,13 +13,18 @@ const PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1542013936693-88463
 export default function MyReportsScreen() {
     const router = useRouter();
     const [reports, setReports] = useState<any[]>([]);
+    const [searchQuery, setSearchQuery] = useState('');
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
     const fetchReports = async () => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            if (!user) {
+                setLoading(false);
+                setRefreshing(false);
+                return;
+            }
 
             const { data, error } = await supabase
                 .from('incidents')
@@ -37,18 +42,30 @@ export default function MyReportsScreen() {
         }
     };
 
+    const filteredReports = reports.filter(r => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        return (
+            (r.title || '').toLowerCase().includes(query) ||
+            (r.location_name || '').toLowerCase().includes(query) ||
+            (r.status || '').toLowerCase().includes(query)
+        );
+    });
+
     useEffect(() => {
         fetchReports();
 
-        const subscription = supabase
-            .channel('my_reports_updates')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, () => {
-                fetchReports();
-            })
+        const channel = supabase
+            .channel('my_reports_realtime')
+            .on('postgres_changes', { 
+                event: '*', 
+                schema: 'public', 
+                table: 'incidents' 
+            }, () => fetchReports())
             .subscribe();
 
         return () => {
-            supabase.removeChannel(subscription);
+            supabase.removeChannel(channel);
         };
     }, []);
 
@@ -56,6 +73,20 @@ export default function MyReportsScreen() {
         setRefreshing(true);
         fetchReports();
     };
+
+    const formatDate = (dateStr: string) => {
+        try {
+            if (!dateStr) return 'Unknown Date';
+            return new Date(dateStr).toLocaleDateString('en-KE', { 
+                day: '2-digit', 
+                month: 'short', 
+                year: 'numeric' 
+            });
+        } catch (e) {
+            return 'Date Error';
+        }
+    };
+
     const getStatusStyle = (status: string) => {
         const s = (status || '').toLowerCase();
         switch (s) {
@@ -78,12 +109,12 @@ export default function MyReportsScreen() {
 
         return (
             <MotiView
-                from={{ opacity: 0, translateY: 20 }}
-                animate={{ opacity: 1, translateY: 0 }}
-                transition={{ delay: index * 100 }}
+                from={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: index * 50 }}
             >
                 <TouchableOpacity
-                    activeOpacity={0.9}
+                    activeOpacity={0.8}
                     onPress={() => router.push(`/incident/${item.id}`)}
                     style={styles.card}
                 >
@@ -93,24 +124,22 @@ export default function MyReportsScreen() {
                     />
                     <View style={styles.cardContent}>
                         <View style={styles.cardHeader}>
-                            <Text style={styles.cardTitle}>{item.title}</Text>
+                            <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
                             <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
                                 <StatusIcon size={12} color={status.text} />
-                                <Text style={[styles.statusText, { color: status.text }]}>{item.status}</Text>
+                                <Text style={[styles.statusText, { color: status.text }]}>{(item.status || 'unknown').toUpperCase()}</Text>
                             </View>
                         </View>
 
                         <View style={styles.locationRow}>
                             <MapPin size={14} color={COLORS.textMuted} />
-                            <Text style={styles.locationText}>{item.location_name}</Text>
+                            <Text style={styles.locationText} numberOfLines={1}>{item.location_name}</Text>
                         </View>
 
                         <View style={styles.cardFooter}>
-                            <Text style={styles.dateText}>
-                                {new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                            </Text>
-                            <TouchableOpacity style={styles.detailsBtn}>
-                                <Text style={styles.detailsBtnText}>Track Status</Text>
+                            <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
+                            <TouchableOpacity style={styles.detailsBtn} onPress={() => router.push(`/incident/${item.id}`)}>
+                                <Text style={styles.detailsBtnText}>Track</Text>
                                 <ChevronRight size={16} color={COLORS.primary} />
                             </TouchableOpacity>
                         </View>
@@ -126,24 +155,25 @@ export default function MyReportsScreen() {
             <SafeAreaView style={styles.safe} edges={['top']}>
                 <View style={styles.header}>
                     <Text style={styles.title}>My Submissions</Text>
-                    <TouchableOpacity style={styles.analyticsBtn}>
+                    <TouchableOpacity style={styles.analyticsBtn} activeOpacity={0.7} onPress={() => Alert.alert('Coming Soon', 'Personal impact analytics are preparing for launch.')}>
                         <Text style={styles.analyticsText}>Insights</Text>
                     </TouchableOpacity>
                 </View>
 
                 <FlatList
-                    data={reports}
+                    data={filteredReports}
                     renderItem={renderItem}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={styles.listContent}
+                    keyboardShouldPersistTaps="handled"
                     refreshControl={
-                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />
+                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />
                     }
                     ListEmptyComponent={
                         !loading ? (
                             <View style={styles.emptyContainer}>
                                 <AlertCircle size={48} color={COLORS.textMuted} />
-                                <Text style={styles.emptyText}>No reports found</Text>
+                                <Text style={styles.emptyText}>{searchQuery ? 'No matching reports' : 'No reports found'}</Text>
                                 <TouchableOpacity style={styles.reportNowBtn} onPress={() => router.push('/(tabs)/report')}>
                                     <Text style={styles.reportNowText}>Report an Incident</Text>
                                 </TouchableOpacity>
@@ -180,9 +210,18 @@ export default function MyReportsScreen() {
                                         placeholder="Search my reports..."
                                         style={styles.searchInput}
                                         placeholderTextColor={COLORS.textMuted}
+                                        value={searchQuery}
+                                        onChangeText={setSearchQuery}
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
                                     />
+                                    {searchQuery.length > 0 && (
+                                        <TouchableOpacity onPress={() => setSearchQuery('')}>
+                                            <AlertCircle size={18} color={COLORS.textMuted} />
+                                        </TouchableOpacity>
+                                    )}
                                 </View>
-                                <TouchableOpacity style={styles.filterBtn}>
+                                <TouchableOpacity style={styles.filterBtn} activeOpacity={0.7} onPress={() => Alert.alert('Filter', 'Advanced filtering coming soon.')}>
                                     <Filter size={20} color={COLORS.primary} />
                                 </TouchableOpacity>
                             </View>

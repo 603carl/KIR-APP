@@ -61,33 +61,41 @@ export default function TabLayout() {
         if (storedDel) deletedIds = JSON.parse(storedDel);
       } catch (e) { }
 
-      // Fetch install date to filter old notifications
-      const installDate = await SecureStore.getItemAsync('install_date');
-      const filterDate = installDate || user.created_at;
+      // Calculate the 7-day "Latest" threshold (same as Alerts screen)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const installDateStr = await SecureStore.getItemAsync('install_date');
+      const installDate = installDateStr ? new Date(installDateStr) : new Date(user.created_at);
+      
+      // Use the more recent of (install date, 7 days ago)
+      const thresholdDate = installDate > sevenDaysAgo ? installDate : sevenDaysAgo;
+      const thresholdISO = thresholdDate.toISOString();
 
       // Fetch unread IDs to filter deleted ones
+      // Logic: ONLY fetch unread since threshold (strict 7 days)
       const { data: unreadPersonal } = await supabase
         .from('notifications')
         .select('id')
         .eq('user_id', user.id)
         .eq('is_read', false)
-        .gt('created_at', filterDate);
+        .gt('created_at', thresholdISO);
 
       const unreadPersonalCount = (unreadPersonal || []).filter(
         n => !deletedIds.includes(n.id)
       ).length;
 
-      // Count unacknowledged broadcasts since install
+      // Count unacknowledged broadcasts since threshold
       const { data: broadcasts } = await supabase
         .from('broadcasts')
         .select('id')
-        .gt('created_at', filterDate);
+        .gt('created_at', thresholdISO);
 
       const unacknowledgedBroadcasts = (broadcasts || []).filter(
         b => !acknowledgedIds.includes(b.id) && !deletedIds.includes(b.id)
       ).length;
 
       setUnreadCount(unreadPersonalCount + unacknowledgedBroadcasts);
+
     } catch (error) {
       console.error('Error fetching unread count:', error);
     }

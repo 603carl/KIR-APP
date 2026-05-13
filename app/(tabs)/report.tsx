@@ -62,6 +62,18 @@ export default function ReportScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
 
+    // Safety: Log mount and ensure insets are valid
+    React.useEffect(() => {
+        console.log('[ReportScreen] Mounted');
+    }, []);
+
+    const safeInsets = {
+        top: insets?.top || 0,
+        bottom: insets?.bottom || 0,
+        left: insets?.left || 0,
+        right: insets?.right || 0,
+    };
+
     const pickMedia = async () => {
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images', 'videos'],
@@ -119,6 +131,18 @@ export default function ReportScreen() {
     };
 
     const handleFinalSubmit = async () => {
+        const cleanTitle = title.trim();
+        const cleanDescription = description.trim();
+
+        if (cleanTitle.length < 5) {
+            Alert.alert('Title Too Short', 'Please provide a more descriptive title (at least 5 characters).');
+            return;
+        }
+        if (cleanDescription.length < 10) {
+            Alert.alert('Description Too Short', 'Please provide more details about the incident (at least 10 characters).');
+            return;
+        }
+
         setIsSubmitting(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
