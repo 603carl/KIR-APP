@@ -66,18 +66,19 @@ export default function IncidentDetailsScreen() {
     const fetchComments = async () => {
         const { data } = await supabase
             .from('comments')
-            .select('*, profiles(full_name, avatar_url, role)')
+            .select('*, profile_cards(full_name, avatar_url)')
             .eq('incident_id', id)
             .order('created_at', { ascending: false });
         if (data) setComments(data);
     };
 
     const fetchVerifications = async () => {
-        const { count } = await supabase
-            .from('verifications')
-            .select('*', { count: 'exact', head: true })
-            .eq('incident_id', id);
-        setVerificationCount(count || 0);
+        const { data } = await supabase.rpc('get_incident_verification_summary', {
+            target_incident_id: id,
+        });
+        const summary = data?.[0];
+        setVerificationCount(Number(summary?.verification_count || 0));
+        setHasVerified(summary?.verified_by_me === true);
     };
 
     const fetchTimeline = async () => {
@@ -380,12 +381,7 @@ export default function IncidentDetailsScreen() {
                                     <View key={comment.id} style={styles.commentItem}>
                                         <View style={styles.commentHeader}>
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                                <Text style={styles.commentUser}>{comment.profiles?.full_name || 'Anonymous'}</Text>
-                                                {comment.profiles?.role === 'Official' && (
-                                                    <View style={styles.officialBadge}>
-                                                        <Shield size={10} color={COLORS.primary} />
-                                                    </View>
-                                                )}
+                                                <Text style={styles.commentUser}>{comment.profile_cards?.full_name || 'Anonymous'}</Text>
                                             </View>
                                             <Text style={styles.commentTime}>{getTimeAgo(comment.created_at)}</Text>
                                         </View>

@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
@@ -15,7 +15,7 @@ const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreCl
 // Android caches notification channel settings at creation time.
 // If you change sound/importance/vibration, you MUST bump the version
 // so Android creates a fresh channel with the new settings.
-const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v2';
+const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v3';
 
 let Notifications: any = null;
 let RNIncomingCall: any = null;
@@ -63,7 +63,12 @@ if (!isExpoGo && Notifications) {
             return;
         }
 
-        const notificationData = (data as any)?.notification?.data;
+        const payload = data as any;
+        const notificationData =
+            payload?.notification?.request?.content?.data ??
+            payload?.notification?.data ??
+            payload?.request?.content?.data ??
+            payload?.data;
         if (!notificationData) return;
 
         console.log('[BG Task] Background notification received:', JSON.stringify(notificationData));
@@ -142,10 +147,10 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
     const notificationListener = useRef<any | null>(null);
     const responseListener = useRef<any | null>(null);
     const coldStartChecked = useRef(false);
+    const lastSyncTime = useRef<number>(0);
 
     async function registerForPushNotificationsAsync() {
         if (isExpoGo) {
-            console.log('Skipping push token registration in Expo Go');
             return null;
         }
 
@@ -153,7 +158,8 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
 
         if (Platform.OS === 'android') {
             // Create versioned emergency broadcast channel
-            // The v2 suffix forces Android to create a new channel with correct settings
+            // The v3 suffix forces Android to create a new channel after repairing
+            // the packaged emergency sound resource.
             // (old channels cache their config and ignore code changes)
             await Notifications.setNotificationChannelAsync(EMERGENCY_CHANNEL_ID, {
                 name: 'Emergency Broadcasts',
@@ -177,6 +183,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             // Clean up old channel to avoid confusion
             try {
                 await Notifications.deleteNotificationChannelAsync('emergency-broadcasts');
+                await Notifications.deleteNotificationChannelAsync('emergency-broadcasts-v2');
             } catch (_) { /* old channel may not exist */ }
         }
 
@@ -237,7 +244,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
 
             if (token || location) {
                 try {
-                    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+                    const { data: { session }, error: sessionError } = await getSessionSafely();
                     if (sessionError) {
                         console.warn('[Push] Session error during sync:', sessionError.message);
                         return;
@@ -336,12 +343,27 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             });
         }
 
-        // ─── AppState Listener (Re-sync on return) ──────────────────
-        // If user goes to settings to enable notifications, we want to
-        // grab the token immediately when they return.
+        // ─── Bug #9 Fix: AppState Listener with 10-minute throttle ────────────
+        // Previously syncToken() fired on every single foreground event.
+        // Each call chains 3 heavy async operations:
+        //   1. Location.getCurrentPositionAsync() — GPS hardware activation
+        //   2. Notifications.getExpoPushTokenAsync() — network call to Expo
+        //   3. supabase.rpc('sync_user_profile_data') — DB write
+        // On a device that foregrounds frequently (e.g. user checking a text),
+        // this floods the network layer with redundant requests, causing
+        // visible UI jank and competing with SOS Realtime channels for bandwidth.
+        // A 10-minute throttle is safe: push tokens and location don't change
+        // meaningfully within that window.
+        const SYNC_THROTTLE_MS = 10 * 60 * 1000; // 10 minutes
         const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
             if (nextAppState === 'active') {
-                console.log('[AppState] App returned to foreground, re-syncing token...');
+                const now = Date.now();
+                if (now - lastSyncTime.current < SYNC_THROTTLE_MS) {
+                    console.log(`[AppState] Sync skipped — last sync was ${Math.round((now - lastSyncTime.current) / 1000)}s ago (throttle: ${SYNC_THROTTLE_MS / 1000}s)`);
+                    return;
+                }
+                lastSyncTime.current = now;
+                console.log('[AppState] App returned to foreground, re-syncing token (throttled)...');
                 syncToken();
             }
         });

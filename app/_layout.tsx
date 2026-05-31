@@ -1,6 +1,8 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
+import * as IntentLauncher from 'expo-intent-launcher';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -9,7 +11,8 @@ import 'react-native-reanimated';
 import { EmergencyBroadcastOverlay, type BroadcastAlert } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { useColorScheme } from '@/components/useColorScheme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import { supabase } from '@/lib/supabase';
+import { getStartupItem, setStartupItem } from '@/lib/startupStorage';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import { ProfileProvider } from '@/context/ProfileContext';
 import { useAssets } from 'expo-asset';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -17,7 +20,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useRootNavigationState, useRouter, useSegments } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { useCallback, useRef, useState } from 'react';
-import { Alert, AppState, Linking, LogBox, Platform, Text, TouchableOpacity } from 'react-native';
+import { Alert, AppState, Linking, LogBox, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // Conditionally import expo-notifications (not available in Expo Go)
@@ -30,7 +33,11 @@ if (!isExpoGo) {
 }
 
 // Ignore specific warnings if necessary
-LogBox.ignoreLogs(['Reading the project root', 'NativeEventEmitter']);
+LogBox.ignoreLogs([
+    'Reading the project root',
+    'NativeEventEmitter',
+    'SafeAreaView has been deprecated',
+]);
 
 
 // Configure Sentry User Context
@@ -74,7 +81,7 @@ export default function RootLayout() {
 
     // Preload EAS sound asset
     const [assets] = useAssets([
-        require('../assets/sounds/emergency_alert.mp3'),
+        require('../assets/sounds/eas-alert-sound-fx.mp3'),
     ]);
 
     const colorScheme = useColorScheme();
@@ -91,12 +98,64 @@ export default function RootLayout() {
     const appState = useRef(AppState.currentState);
     const lastBackgroundTime = useRef<number | null>(null);
     const autoSignOutTimeout = useRef<number>(1800); // 30 minutes for production stability
+    const criticalAlertsEnabled = useRef(true);
+    const biometricLockEnabled = useRef(false);
+    const [privacyLocked, setPrivacyLocked] = useState(false);
 
+    // ─── Bug #2 Fix: Segments ref ─────────────────────────────────────
+    // The auth listener is registered once inside a useEffect. Without a ref,
+    // it closes over the segments value at mount time and never sees updates.
+    // Reading segmentsRef.current always gives the live segment value.
+    const segmentsRef = useRef(segments);
+    useEffect(() => { segmentsRef.current = segments; }, [segments]);
+
+    const unlockWithBiometrics = useCallback(async () => {
+        if (!biometricLockEnabled.current) {
+            setPrivacyLocked(false);
+            return true;
+        }
+
+        setPrivacyLocked(true);
+        const result = await LocalAuthentication.authenticateAsync({
+            promptMessage: 'Unlock Kenya Incident Report',
+            fallbackLabel: 'Use Passcode',
+            disableDeviceFallback: false,
+        });
+        if (result.success) {
+            setPrivacyLocked(false);
+            return true;
+        }
+        return false;
+    }, []);
+
+    const loadUserControls = useCallback(async (userId: string, requireUnlock: boolean) => {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('privacy_settings, notification_prefs')
+            .eq('id', userId)
+            .single();
+        if (error) {
+            console.warn('[Privacy] Unable to load controls:', error.message);
+            return;
+        }
+
+        const privacySettings = (data?.privacy_settings || {}) as Record<string, any>;
+        const notificationPrefs = (data?.notification_prefs || {}) as Record<string, any>;
+        const storedTimeout = privacySettings.auto_sign_out_timeout;
+        autoSignOutTimeout.current = typeof storedTimeout === 'number' ? storedTimeout : 1800;
+        biometricLockEnabled.current = privacySettings.biometric_lock === true;
+        criticalAlertsEnabled.current = notificationPrefs.emergency !== false;
+
+        if (requireUnlock) {
+            await unlockWithBiometrics();
+        }
+    }, [unlockWithBiometrics]);
 
     // ─── Push Notification Handler (SINGLE instance) ─────────────────
     // When a broadcast push is received or tapped, this triggers the overlay
     const handleBroadcastReceived = useCallback((data: any) => {
         if (!data) return;
+        if (!criticalAlertsEnabled.current) return;
         console.log('[Layout] Broadcast received from push:', JSON.stringify(data));
         setActiveBroadcast({
             id: data.broadcastId || 'push-' + Date.now(),
@@ -129,12 +188,25 @@ export default function RootLayout() {
             if (!loaded) return;
 
             try {
+                // ─── Bug #4 Fix: withTimeout utility ──────────────────────────
+                // On Android 8–11, SecureStore uses the Android Keystore which can
+                // block indefinitely in "Direct Boot" state (phone restarted but
+                // not yet unlocked). Without a timeout, the entire UI stays null
+                // (blank white screen) with no feedback. A 5s timeout for the
+                // network call and 3s for local storage are safe, generous bounds.
+                function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+                    return Promise.race([
+                        promise,
+                        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+                    ]);
+                }
+
                 // 1. Determine Initial Route & Data in Parallel
                 const [sessionRes, hasSeenOnboarding, installDate, lastAppVersion] = await Promise.all([
-                    supabase.auth.getSession(),
-                    SecureStore.getItemAsync('hasSeenOnboarding'),
-                    SecureStore.getItemAsync('install_date'),
-                    SecureStore.getItemAsync('app_version')
+                    withTimeout(getSessionSafely(), 5000, { data: { session: null }, error: null }),
+                    withTimeout(getStartupItem('hasSeenOnboarding'), 3000, null),
+                    withTimeout(getStartupItem('install_date'), 3000, null),
+                    withTimeout(getStartupItem('app_version'), 3000, null)
                 ]);
 
                 const session = sessionRes.data.session;
@@ -143,8 +215,8 @@ export default function RootLayout() {
                 // 2. Set Install Date if missing
                 if (!installDate) {
                     const now = new Date().toISOString();
-                    await SecureStore.setItemAsync('install_date', now);
-                    await SecureStore.setItemAsync('app_version', currentVersion);
+                    await setStartupItem('install_date', now);
+                    await setStartupItem('app_version', currentVersion);
                 }
 
                 // 3. Update Force-Logout Check: If version changed and not new install, clear session
@@ -153,12 +225,12 @@ export default function RootLayout() {
                     // Only attempt signOut if we actually have a session
                     if (session) {
                         try {
-                            await supabase.auth.signOut();
+                            await supabase.auth.signOut({ scope: 'local' });
                         } catch (signOutError) {
                             console.warn('[Update] Initial signOut failed (likely expired), proceeding with local clear.', signOutError);
                         }
                     }
-                    await SecureStore.setItemAsync('app_version', currentVersion);
+                    await setStartupItem('app_version', currentVersion);
                     setPendingRedirect('/auth/login');
                     return;
                 }
@@ -177,6 +249,7 @@ export default function RootLayout() {
 
                 // 5. Biometric Lock & Android 14+ Ready Check
                 if (session?.user) {
+                    await loadUserControls(session.user.id, true);
                     // Android 14+: Check FSI permission and prompt if needed
                     if (Platform.OS === 'android' && Platform.Version >= 34) {
                         promptForFSIPermission();
@@ -184,7 +257,13 @@ export default function RootLayout() {
                 }
 
             } catch (e) {
-                console.error('Init Error:', e);
+                // ─── Bug #3 Fix: Fail Closed ───────────────────────────────────
+                // Any exception during init (network error, SecureStore timeout,
+                // etc.) must NOT leave the app rendering an unprotected screen.
+                // We always redirect to login on error — the user can re-auth if
+                // they had a valid session; this is far safer than granting access.
+                console.error('[Layout] Init Error — failing closed to /auth/login:', e);
+                setPendingRedirect('/auth/login');
             } finally {
                 setInitialRouteDetermined(true);
                 setIsNavigationReady(true);
@@ -197,7 +276,7 @@ export default function RootLayout() {
                             const lastResponse = await Notifications.getLastNotificationResponseAsync();
                             if (lastResponse) {
                                 const data = lastResponse.notification?.request?.content?.data;
-                                if (data && (data.broadcastId || data.isBroadcast)) {
+                                if (criticalAlertsEnabled.current && data && (data.broadcastId || data.isBroadcast)) {
                                     console.log('[Layout] Cold start broadcast detected:', JSON.stringify(data));
                                     setActiveBroadcast({
                                         id: data.broadcastId || 'coldstart-' + Date.now(),
@@ -217,7 +296,7 @@ export default function RootLayout() {
         }
 
         initAndCheckNavigation();
-    }, [loaded]); // Removed segments from potential loop dependencies
+    }, [loaded, loadUserControls]); // Removed segments from potential loop dependencies
 
     // Perform the redirect securely once rotation/layout is mounted
     useEffect(() => {
@@ -239,23 +318,36 @@ export default function RootLayout() {
         const broadcastSubscription = supabase
             .channel('global:emergency_sync')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, (payload) => {
+                if (!criticalAlertsEnabled.current) return;
                 const newBroadcast = payload.new as BroadcastAlert;
                 console.log('[Realtime] New broadcast received:', newBroadcast.title);
                 setActiveBroadcast(newBroadcast);
             })
             .subscribe();
 
-        // ─── Auth State Listener (Simplified to prevent loops) ─────────
+        // ─── Auth State Listener ────────────────────────────────────────
+        // Bug #2 Fix: Use segmentsRef.current (NOT the segments variable) so
+        // we always read the LIVE segment. The segments variable captured in
+        // this closure is stale — it reflects the value at the time this
+        // useEffect ran, not when the auth event fires.
+        //
+        // TOKEN_REFRESHED is deliberately NOT handled here. Supabase fires
+        // this every ~55 minutes. Routing on it would cause repeated
+        // router.replace() calls that remount all tab components, triggering
+        // new auth calls, creating an exponential crash cascade.
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             console.log(`[Auth] Event: ${event}`);
             if (event === 'SIGNED_OUT') {
                 router.replace('/auth/login');
             } else if (event === 'SIGNED_IN') {
-                // Check if already in tabs before replacing
-                if (segments[0] !== '(tabs)') {
+                // Guard: only redirect if NOT already inside the tabs navigator.
+                // Using the ref prevents stale-closure reads.
+                if (segmentsRef.current[0] !== '(tabs)') {
                     router.replace('/(tabs)');
                 }
             }
+            // Deliberately no handler for TOKEN_REFRESHED — it must never
+            // trigger a navigation redirect.
         });
 
 
@@ -265,11 +357,27 @@ export default function RootLayout() {
                 appState.current.match(/inactive|background/) &&
                 nextAppState === 'active'
             ) {
+                let signedOut = false;
                 if (lastBackgroundTime.current && autoSignOutTimeout.current !== -1) {
                     const elapsedSeconds = (Date.now() - lastBackgroundTime.current) / 1000;
-                    if (elapsedSeconds > autoSignOutTimeout.current) {
-                        console.log(`Auto sign-out triggered: ${elapsedSeconds}s elapsed (Limit: ${autoSignOutTimeout.current}s)`);
-                        await supabase.auth.signOut();
+                    // ─── Bug #8 Fix: Upper bound guard ────────────────────────
+                    // Without the 86400s (24h) upper bound, a stale
+                    // lastBackgroundTime.current (e.g., from an OEM that fires
+                    // background→active on cold boot with a recycled ref value)
+                    // produces a massive elapsed value, triggering immediate
+                    // sign-out the moment the user opens the app. The upper bound
+                    // catches any value that is clearly a stale/garbage timestamp.
+                    const isWithinValidRange = elapsedSeconds > autoSignOutTimeout.current && elapsedSeconds < 86400;
+                    if (isWithinValidRange) {
+                        console.log(`[Auth] Auto sign-out: ${Math.round(elapsedSeconds)}s elapsed (limit: ${autoSignOutTimeout.current}s, max: 86400s)`);
+                        await supabase.auth.signOut({ scope: 'local' });
+                        signedOut = true;
+                    }
+                }
+                if (!signedOut) {
+                    const { data: { session } } = await getSessionSafely();
+                    if (session?.user) {
+                        await loadUserControls(session.user.id, true);
                     }
                 }
                 lastBackgroundTime.current = null;
@@ -289,7 +397,7 @@ export default function RootLayout() {
             supabase.removeChannel(broadcastSubscription);
             appStateSubscription.remove();
         };
-    }, [loaded]);
+    }, [loaded, loadUserControls, router]);
 
     if (!loaded || !initialRouteDetermined) return null;
 
@@ -303,6 +411,9 @@ export default function RootLayout() {
                         <Stack.Screen name="auth/signup" />
                         <Stack.Screen name="(tabs)" />
                         <Stack.Screen name="incident/[id]" options={{ presentation: 'card' }} />
+                        <Stack.Screen name="police-report/new" options={{ presentation: 'card' }} />
+                        <Stack.Screen name="police-report/index" options={{ presentation: 'card' }} />
+                        <Stack.Screen name="police-report/[id]" options={{ presentation: 'card' }} />
                         <Stack.Screen name="settings" options={{ presentation: 'card', headerShown: true }} />
                         <Stack.Screen name="help" options={{ presentation: 'card', headerShown: true }} />
                         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
@@ -316,6 +427,36 @@ export default function RootLayout() {
                             setActiveBroadcast(null);
                         }}
                     />
+                    {privacyLocked && (
+                        <View style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                            left: 0,
+                            backgroundColor: '#071c18',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 28,
+                            zIndex: 1000,
+                        }}>
+                            <Text style={{ color: '#ffffff', fontSize: 24, fontWeight: '800', marginBottom: 10 }}>
+                                App Locked
+                            </Text>
+                            <Text style={{ color: '#cbd5e1', fontSize: 15, textAlign: 'center', marginBottom: 26 }}>
+                                Authenticate to access your reports and personal information.
+                            </Text>
+                            <TouchableOpacity
+                                style={{ backgroundColor: '#0f766e', borderRadius: 14, paddingHorizontal: 26, paddingVertical: 14, marginBottom: 14 }}
+                                onPress={unlockWithBiometrics}
+                            >
+                                <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '700' }}>Unlock</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => supabase.auth.signOut({ scope: 'local' })}>
+                                <Text style={{ color: '#fca5a5', fontSize: 14, fontWeight: '600' }}>Sign Out</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </ThemeProvider>
             </ProfileProvider>
         </SafeAreaProvider>
@@ -332,14 +473,20 @@ function promptForFSIPermission() {
 
         Alert.alert(
             'Emergency Alert Permission',
-            'To receive critical emergency broadcasts that can wake your phone, please enable "Full Screen Notifications" for this app in your device Settings.\n\nThis is essential for your safety.',
+            'Android requires permission before this app may show urgent alerts over the lock screen. Enable "Full screen notifications" for the strongest visibility. Alarm sound notifications will still be used when this access is unavailable.',
             [
                 { text: 'Later', style: 'cancel' },
                 {
                     text: 'Open Settings',
-                    onPress: () => {
-                        Linking.openSettings();
-                        SecureStore.setItemAsync('fsi_permission_prompted', 'true');
+                    onPress: async () => {
+                        await SecureStore.setItemAsync('fsi_permission_prompted', 'true');
+                        try {
+                            await IntentLauncher.startActivityAsync('android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT', {
+                                data: `package:${Constants.expoConfig?.android?.package || 'com.publickenyaapp.kenyaincidentreport'}`
+                            });
+                        } catch {
+                            await Linking.openSettings();
+                        }
                     }
                 },
             ]

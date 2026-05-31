@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
-import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { getSessionSafely, supabase } from '@/lib/supabase';
+import { cacheKeys, readSecureCache, removeSecureCache, writeSecureCache } from '@/lib/clientCache';
 
 export interface Profile {
   id: string;
@@ -10,6 +10,7 @@ export interface Profile {
   county?: string;
   role?: string;
   avatar_url?: string;
+  notification_prefs?: Record<string, any>;
   privacy_settings?: any;
   accuracy_score?: number;
 }
@@ -25,14 +26,23 @@ const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const currentUserId = useRef<string | null>(null);
 
   const fetchProfile = useCallback(async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await getSessionSafely();
       if (!session?.user) {
         setProfile(null);
         setLoading(false);
         return;
+      }
+
+      currentUserId.current = session.user.id;
+      const displayCacheKey = cacheKeys.displayProfile(session.user.id);
+      const cachedDisplay = await readSecureCache<Profile>(displayCacheKey, 24 * 60 * 60 * 1000);
+      if (cachedDisplay) {
+        setProfile(current => current || cachedDisplay);
+        setLoading(false);
       }
 
       const { data, error } = await supabase
@@ -43,9 +53,16 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       if (error) throw error;
       
-      setProfile({
+      const nextProfile = {
         ...data,
         email: session.user.email
+      } as Profile;
+      setProfile(nextProfile);
+      await writeSecureCache(displayCacheKey, {
+        id: nextProfile.id,
+        full_name: nextProfile.full_name || 'Citizen',
+        avatar_url: nextProfile.avatar_url,
+        accuracy_score: nextProfile.accuracy_score,
       });
     } catch (error) {
       console.error('[ProfileContext] Error fetching profile:', error);
@@ -58,48 +75,20 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
     fetchProfile();
 
     const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
             fetchProfile();
         } else if (event === 'SIGNED_OUT') {
+            if (currentUserId.current) {
+                removeSecureCache(cacheKeys.displayProfile(currentUserId.current)).catch(() => undefined);
+            }
+            currentUserId.current = null;
             setProfile(null);
-        }
-    });
-
-    let profileSubscription: any = null;
-    
-    supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user) {
-            profileSubscription = supabase
-                .channel(`profile_sync:${session.user.id}`)
-                .on(
-                    'postgres_changes',
-                    {
-                        event: 'UPDATE',
-                        schema: 'public',
-                        table: 'profiles',
-                        filter: `id=eq.${session.user.id}`
-                    },
-                    (payload) => {
-                        if (payload.new) {
-                            setProfile(prev => {
-                                if (!prev) return null;
-                                return {
-                                    ...prev,
-                                    ...payload.new,
-                                    id: payload.new.id || prev.id,
-                                    full_name: payload.new.full_name || prev.full_name
-                                } as Profile;
-                            });
-                        }
-                    }
-                )
-                .subscribe();
+            setLoading(false);
         }
     });
 
     return () => {
       authSubscription.unsubscribe();
-      if (profileSubscription) supabase.removeChannel(profileSubscription);
     };
   }, [fetchProfile]);
 

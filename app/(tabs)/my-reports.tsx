@@ -1,8 +1,8 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'expo-router';
+import { getSessionSafely, supabase } from '@/lib/supabase';
+import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { AlertCircle, CheckCircle2, ChevronRight, Clock, Filter, MapPin, Search } from 'lucide-react-native';
+import { AlertCircle, CheckCircle2, ChevronRight, Clock, FileLock2, Filter, MapPin, Search } from 'lucide-react-native';
 import { MotiView } from 'moti';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
@@ -19,18 +19,15 @@ export default function MyReportsScreen() {
 
     const fetchReports = async () => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const { data: { session } } = await getSessionSafely();
+            const user = session?.user;
             if (!user) {
                 setLoading(false);
                 setRefreshing(false);
                 return;
             }
 
-            const { data, error } = await supabase
-                .from('incidents')
-                .select('*')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false });
+            const { data, error } = await supabase.rpc('get_my_incidents');
 
             if (error) throw error;
             setReports(data || []);
@@ -55,17 +52,29 @@ export default function MyReportsScreen() {
     useEffect(() => {
         fetchReports();
 
-        const channel = supabase
-            .channel('my_reports_realtime')
-            .on('postgres_changes', { 
-                event: '*', 
-                schema: 'public', 
-                table: 'incidents' 
-            }, () => fetchReports())
-            .subscribe();
+        let cancelled = false;
+        let channel: ReturnType<typeof supabase.channel> | null = null;
+
+        const subscribe = async () => {
+            const { data: { session } } = await getSessionSafely();
+            if (cancelled || !session?.user) return;
+
+            channel = supabase
+                .channel('my_reports_realtime')
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'incidents',
+                    filter: `user_id=eq.${session.user.id}`,
+                }, () => fetchReports())
+                .subscribe();
+        };
+
+        subscribe();
 
         return () => {
-            supabase.removeChannel(channel);
+            cancelled = true;
+            if (channel) supabase.removeChannel(channel);
         };
     }, []);
 
@@ -184,6 +193,14 @@ export default function MyReportsScreen() {
                     }
                     ListHeaderComponent={
                         <>
+                            <TouchableOpacity style={styles.privatePoliceCard} onPress={() => router.push('/police-report' as Href)}>
+                                <FileLock2 size={23} color={COLORS.primary} />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.privatePoliceTitle}>My Police Reports</Text>
+                                    <Text style={styles.privatePoliceText}>Confidential reports, receipts and secure messages</Text>
+                                </View>
+                                <ChevronRight size={18} color={COLORS.primary} />
+                            </TouchableOpacity>
                             <View style={styles.statsRow}>
                                 <View style={styles.statItem}>
                                     <Text style={styles.statLabel}>Total</Text>
@@ -241,6 +258,9 @@ const styles = StyleSheet.create({
     analyticsBtn: { alignSelf: 'flex-start', marginTop: 12, backgroundColor: COLORS.primary + '10', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
     analyticsText: { color: COLORS.primary, fontSize: 14, fontWeight: '800' },
     listContent: { padding: SPACING.lg, paddingBottom: 120 },
+    privatePoliceCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.primary + '10', borderRadius: 18, borderWidth: 1, borderColor: COLORS.primary + '25', padding: 15, marginBottom: 20 },
+    privatePoliceTitle: { color: COLORS.primary, fontSize: 16, fontWeight: '900' },
+    privatePoliceText: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4 },
     statsRow: { flexDirection: 'row', gap: 16, marginBottom: 24 },
     statItem: { flex: 1, backgroundColor: COLORS.background, padding: 20, borderRadius: 24, ...SHADOWS.soft },
     statLabel: { fontSize: 13, color: COLORS.textMuted, fontWeight: '700', marginBottom: 6 },

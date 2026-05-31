@@ -16,7 +16,7 @@ import * as Crypto from 'expo-crypto';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { X, Send, Shield, MessageSquare, AlertCircle } from 'lucide-react-native';
 import { MotiView, AnimatePresence } from 'moti';
-import { supabase } from '@/lib/supabase';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import { COLORS, BORDER_RADIUS, SPACING } from '@/constants/Theme';
 import { useProfile } from '@/context/ProfileContext';
 
@@ -34,9 +34,12 @@ interface SOSChatModalProps {
     onClose: () => void;
     sosId: string;
     onCancelSOS?: () => void;
+    // Bug #7: Parent passes a ref so Dashboard can queue a message typed
+    // during the 'pending' window. The modal auto-sends it once sosId resolves.
+    pendingMessageRef?: React.MutableRefObject<string | null>;
 }
 
-export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, sosId, onCancelSOS }) => {
+export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, sosId, onCancelSOS, pendingMessageRef }) => {
     const { profile } = useProfile();
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
@@ -44,93 +47,170 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
     const [sending, setSending] = useState(false);
     const [sosStatus, setSosStatus] = useState<'active' | 'responded' | 'acknowledged' | 'resolved' | 'cancelled'>('active');
     const isResolved = sosStatus === 'resolved' || sosStatus === 'cancelled';
+    const isPendingLink = sosId === 'pending';
+    const hasEstablishedLink = !!sosId && sosId !== 'pending' && sosId.length >= 20;
+    const canTypeMessage = !sending && (isPendingLink || hasEstablishedLink);
+    const sendDisabled = !newMessage.trim() || sending || (!isPendingLink && !hasEstablishedLink);
     const flatListRef = useRef<FlatList>(null);
 
+    // ─── Bug #6 Fix: Both channels tracked via refs ────────────────────
+    // Previously, statusSub was a bare local variable. When the effect cleanup
+    // ran before subscribe() completed (e.g. user closed modal mid-handshake),
+    // the server kept the socket open — a zombie subscription. On each re-open,
+    // a new channel was stacked on top, multiplying subscriptions until the
+    // device ran out of socket file descriptors and froze.
     const channelRef = useRef<any>(null);
+    const statusSubRef = useRef<any>(null);
+
+    // ─── Bug #7 Fix: Auto-flush queued message on sosId resolution ────
+    // If the user typed a message while sosId was 'pending', it was blocked.
+    // This effect fires when sosId transitions to a real UUID, auto-sending
+    // any queued message without requiring user interaction.
+    const handleSendMessageWithText = async (text: string) => {
+        if (!text.trim() || !profile) return;
+        const msgId = require('expo-crypto').randomUUID();
+        const newMsg: Message = {
+            id: msgId, sos_id: sosId, content: text,
+            sender_role: 'citizen',
+            sender_name: profile.full_name || 'Citizen',
+            created_at: new Date().toISOString()
+        };
+        try {
+            const { data, error } = await supabase.rpc('send_sos_message', {
+                p_sos_id: sosId,
+                p_message_id: msgId,
+                p_content: text,
+            });
+            if (error) throw error;
+            const persistedMessage = (data || newMsg) as Message;
+            setMessages(current => current.some(message => message.id === persistedMessage.id)
+                ? current
+                : [...current, persistedMessage]);
+            if (channelRef.current) {
+                channelRef.current.send({ type: 'broadcast', event: 'message', payload: persistedMessage });
+            }
+        } catch (e) {
+            console.error('[SOSChat] Auto-flush send error:', e);
+        }
+    };
 
     useEffect(() => {
-        if (isVisible && sosId) {
-            setLoading(true);
-            const markMessagesAsRead = async () => {
-                if (!sosId || sosId.length < 20) return;
-                try {
-                    await supabase
-                        .from('sos_messages' as any)
-                        .update({ is_read: true, read_at: new Date().toISOString() } as any)
-                        .eq('sos_id', sosId)
-                        .neq('sender_role', 'citizen')
-                        .is('is_read', false);
-                } catch (e) {
-                    console.warn('[SOSChat] Mark read fail:', e);
-                }
-            };
+        // Only fire when transitioning from 'pending' to a real UUID
+        if (sosId && sosId !== 'pending' && sosId.length >= 20 && pendingMessageRef?.current) {
+            const queuedMsg = pendingMessageRef.current;
+            pendingMessageRef.current = null;
+            console.log('[SOSChat] Flushing queued message after SOS ID resolved:', queuedMsg);
+            handleSendMessageWithText(queuedMsg);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sosId]);
 
-            const fetchHistory = async () => {
-                // Wait for real ID if still connecting
-                if (sosId.length < 20) {
-                    setLoading(true);
-                    return;
-                }
+    useEffect(() => {
+        if (!isVisible || !sosId) return;
 
-                try {
-                    // Fetch SOS Details first for status
-                    const { data: sosData } = await supabase
-                        .from('sos_alerts')
-                        .select('status')
-                        .eq('id', sosId)
-                        .single();
-                    
-                    if (sosData) setSosStatus(sosData.status);
+        // ─── Bug #6 Fix: isActive guard ─────────────────────────────────
+        // Prevents stale async operations (fetch, subscribe callbacks) from
+        // writing state after the component has unmounted or the effect has
+        // been cleaned up. Without this, a slow fetchHistory() completing
+        // after modal close would still call setMessages() on an unmounted
+        // component, causing React state update warnings and memory leaks.
+        let isActive = true;
 
-                    const { data, error } = await supabase
-                        .from('sos_messages')
-                        .select('*')
-                        .eq('sos_id', sosId)
-                        .order('created_at', { ascending: true });
+        setLoading(true);
 
-                    if (error) throw error;
+        const markMessagesAsRead = async () => {
+            if (!sosId || sosId.length < 20) return;
+            try {
+                await supabase
+                    .from('sos_messages' as any)
+                    .update({ is_read: true, read_at: new Date().toISOString() } as any)
+                    .eq('sos_id', sosId)
+                    .neq('sender_role', 'citizen')
+                    .is('is_read', false);
+            } catch (e) {
+                console.warn('[SOSChat] Mark read fail:', e);
+            }
+        };
+
+        const fetchHistory = async () => {
+            if (!sosId || sosId.length < 20) {
+                if (isActive) setLoading(false);
+                return;
+            }
+            try {
+                const { data: sosData } = await supabase
+                    .from('sos_alerts')
+                    .select('status')
+                    .eq('id', sosId)
+                    .single();
+                if (isActive && sosData) setSosStatus(sosData.status);
+
+                const { data, error } = await supabase
+                    .from('sos_messages')
+                    .select('*')
+                    .eq('sos_id', sosId)
+                    .order('created_at', { ascending: true });
+                if (error) throw error;
+                if (isActive) {
                     setMessages(data || []);
-                    
-                    // Mark history as read once loaded
                     markMessagesAsRead();
-                } catch (e) {
-                    console.error('Error fetching history:', e);
-                } finally {
-                    setLoading(false);
                 }
-            };
+            } catch (e) {
+                console.error('[SOSChat] Error fetching history:', e);
+            } finally {
+                if (isActive) setLoading(false);
+            }
+        };
 
-            fetchHistory();
-            
-            // Listen for SOS resolution status
+        fetchHistory();
+
+        // ─── Bug #5 Fix: Status channel with error handling & reconnect ─
+        // Previously .subscribe() had no callback. On CHANNEL_ERROR or
+        // TIMED_OUT, the channel silently failed — status updates from Watch
+        // Command never arrived. Now we detect failures and reconnect with
+        // exponential backoff (capped at 8s).
+        let statusReconnectAttempts = 0;
+        const subscribeStatusChannel = () => {
+            if (!isActive) return;
             const statusSub = supabase
                 .channel(`sos_status:${sosId}`)
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sos_alerts', filter: `id=eq.${sosId}` }, (payload) => {
                     const updated = payload.new as any;
-                    setSosStatus(updated.status);
+                    if (isActive) setSosStatus(updated.status);
                 })
-                .subscribe();
+                .subscribe((status, err) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log('[SOSChat] Status channel live');
+                        statusReconnectAttempts = 0;
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        console.warn(`[SOSChat] Status channel ${status}. Reconnecting...`, err);
+                        if (isActive) {
+                            const delay = Math.min(1000 * Math.pow(2, statusReconnectAttempts), 8000);
+                            statusReconnectAttempts++;
+                            setTimeout(subscribeStatusChannel, delay);
+                        }
+                    }
+                });
+            statusSubRef.current = statusSub;
+        };
+        subscribeStatusChannel();
 
-            // 2. Setup Hybrid Channels
+        // ─── Bug #5 Fix: Message channel with error handling & reconnect ─
+        let msgReconnectAttempts = 0;
+        const subscribeMsgChannel = () => {
+            if (!isActive) return;
             const channel = supabase.channel(`sos_chat:${sosId}`);
-            
             channel
-                // A. Listen for DB Changes (Reliability)
                 .on(
                     'postgres_changes',
-                    { 
-                        event: 'INSERT', 
-                        schema: 'public', 
-                        table: 'sos_messages', 
-                        filter: `sos_id=eq.${sosId}` 
-                    },
+                    { event: 'INSERT', schema: 'public', table: 'sos_messages', filter: `sos_id=eq.${sosId}` },
                     (payload) => {
+                        if (!isActive) return;
                         const msg = payload.new as Message;
                         setMessages(current => {
                             if (current.some(m => m.id === msg.id)) return current;
                             return [...current, msg];
                         });
-                        // Automatically mark as read if arriving while chat is open
                         if (msg.sender_role !== 'citizen') {
                             supabase
                                 .from('sos_messages' as any)
@@ -142,36 +222,61 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                         }
                     }
                 )
-                // C. Listen for Broadcast (Fallback Speed)
-                .on(
-                    'broadcast',
-                    { event: 'message' },
-                    (payload) => {
-                        const msg = payload.payload as Message;
-                        if (msg.sos_id === sosId) {
-                            setMessages(current => {
-                                if (current.some(m => m.id === msg.id)) return current;
-                                return [...current, msg];
-                            });
+                .on('broadcast', { event: 'message' }, (payload) => {
+                    if (!isActive) return;
+                    const msg = payload.payload as Message;
+                    if (msg.sos_id === sosId) {
+                        setMessages(current => {
+                            if (current.some(m => m.id === msg.id)) return current;
+                            return [...current, msg];
+                        });
+                    }
+                })
+                .subscribe((status, err) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log('[SOSChat] Message channel live');
+                        msgReconnectAttempts = 0;
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        console.warn(`[SOSChat] Message channel ${status}. Reconnecting...`, err);
+                        if (isActive) {
+                            const delay = Math.min(1000 * Math.pow(2, msgReconnectAttempts), 8000);
+                            msgReconnectAttempts++;
+                            setTimeout(subscribeMsgChannel, delay);
                         }
                     }
-                )
-                .subscribe();
-
+                });
             channelRef.current = channel;
+        };
+        subscribeMsgChannel();
 
-            return () => {
-                supabase.removeChannel(statusSub);
-                if (channel) supabase.removeChannel(channel);
-            };
-        }
+        return () => {
+            // ─── Bug #6 Fix: Null-safe cleanup with isActive guard ───────
+            isActive = false;
+            if (statusSubRef.current) {
+                supabase.removeChannel(statusSubRef.current);
+                statusSubRef.current = null;
+            }
+            if (channelRef.current) {
+                supabase.removeChannel(channelRef.current);
+                channelRef.current = null;
+            }
+        };
     }, [isVisible, sosId]);
+
 
     const handleSendMessage = async () => {
         if (!newMessage.trim()) return;
         
+        // \u2500\u2500\u2500 Bug #7 Fix: Queue instead of discard \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        // Previously an Alert blocked the user and discarded their message.
+        // Now we store the text in pendingMessageRef — the modal's useEffect
+        // watching sosId will auto-send it the moment a real UUID arrives.
         if (sosId === 'pending') {
-            Alert.alert('Establishing Connection', 'Please wait a moment while we secure your connection to emergency services.');
+            if (pendingMessageRef) {
+                pendingMessageRef.current = newMessage.trim();
+                setNewMessage('');
+                console.log('[SOSChat] Message queued — waiting for SOS ID to resolve.');
+            }
             return;
         }
 
@@ -180,7 +285,7 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
         // Safety Fallback: If profile context is stale, try to get fresh session
         if (!activeProfile) {
             console.warn('[SOSChat] Profile missing in context, attempting session recovery...');
-            const { data: { session } } = await supabase.auth.getSession();
+            const { data: { session } } = await getSessionSafely();
             if (session?.user) {
                 activeProfile = { id: session.user.id, full_name: 'Citizen' } as any;
             } else {
@@ -216,35 +321,27 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
         try {
             console.log(`[SOSChat] Transmitting message ${msgId} for SOS ${sosId}`);
 
-            // STEP 1: HYBRID BROADCAST (Immediate Fallback)
+            const { data, error } = await supabase.rpc('send_sos_message', {
+                p_sos_id: sosId,
+                p_message_id: msgId,
+                p_content: text,
+            });
+
+            if (error) throw error;
+
+            const persistedMessage = (data || newMsg) as Message;
             if (channelRef.current) {
                 const status = channelRef.current.send({
                     type: 'broadcast',
                     event: 'message',
-                    payload: newMsg
+                    payload: persistedMessage
                 });
                 console.log('[SOSChat] Broadcast status:', status);
             }
-
-            // STEP 2: DB PERSISTENCE (Best-effort for history)
-            const { error } = await supabase.from('sos_messages').insert({
-                id: msgId,
-                sos_id: sosId,
-                content: text,
-                sender_role: 'citizen',
-                sender_name: profileInstance.full_name || 'Citizen',
-                sender_id: profileInstance.id
-            });
-
-            
-            if (error) {
-                console.warn('[SOSChat] DB Persist error:', error.message);
-                // We don't alert here because broadcast might have succeeded
-            } else {
-                console.log('[SOSChat] DB Persist successful');
-            }
+            console.log('[SOSChat] DB Persist successful');
         } catch (error) {
             console.error('[SOSChat] Transmission Critical Failure:', error);
+            setMessages(current => current.filter(message => message.id !== msgId));
             Alert.alert('Signal Critical', 'Failed to transmit signal. Please check your internet connection and try again.');
         } finally {
             setSending(false);
@@ -284,10 +381,12 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
         <Modal
             visible={isVisible}
             animationType="slide"
-            transparent={true}
+            transparent={false}
+            statusBarTranslucent={false}
+            navigationBarTranslucent={false}
             onRequestClose={onClose}
         >
-            <View style={styles.modalContainer}>
+            <SafeAreaView edges={['top', 'bottom']} style={styles.modalContainer}>
                 <View style={styles.content}>
                     {/* Tactical Header */}
                     <View style={styles.header}>
@@ -310,79 +409,72 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                     <KeyboardAvoidingView
                         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                         style={styles.chatContainer}
-                        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+                        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
                     >
                         {loading ? (
                             <View style={styles.centerContent}>
                                 <ActivityIndicator size="large" color={COLORS.accent} />
                                 <Text style={styles.loadingText}>Establishing Secure Connection...</Text>
                             </View>
-                        ) : (
-                            <>
-                                {/* Connecting State */}
-                                {(!sosId || sosId.length < 20) && (
-                                    <View style={styles.connectingContainer}>
-                                        <ActivityIndicator color={COLORS.error} size="large" />
-                                        <Text style={styles.connectingText}>CONNECTING TACTICAL LINK...</Text>
-                                        <Text style={styles.connectingSub}>STABILIZING ENCRYPTED TUNNEL</Text>
-                                    </View>
+                        ) : !hasEstablishedLink ? (
+                            <View style={styles.connectingContainer}>
+                                <ActivityIndicator color={COLORS.error} size="large" />
+                                <Text style={styles.connectingText}>CONNECTING TACTICAL LINK...</Text>
+                                <Text style={styles.connectingSub}>STABILIZING ENCRYPTED TUNNEL</Text>
+                                {isPendingLink && pendingMessageRef?.current && (
+                                    <Text style={styles.queuedMessageText}>MESSAGE QUEUED FOR TRANSMISSION</Text>
                                 )}
-
-                                <FlatList
-                                    ref={flatListRef}
-                                    data={messages}
-                                    renderItem={renderMessage}
-                                    keyExtractor={(item) => item.id}
-                                    contentContainerStyle={styles.listContent}
-                                    onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                                    ListEmptyComponent={
-                                        <View style={styles.emptyState}>
-                                            <MessageSquare size={48} color={COLORS.border} />
-                                            <Text style={styles.emptyText}>Waiting for Command Center instructions...</Text>
-                                        </View>
-                                    }
-                                />
-                            </>
+                            </View>
+                        ) : (
+                            <FlatList
+                                ref={flatListRef}
+                                data={messages}
+                                renderItem={renderMessage}
+                                keyExtractor={(item) => item.id}
+                                style={styles.messagesList}
+                                contentContainerStyle={styles.listContent}
+                                onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                                ListEmptyComponent={
+                                    <View style={styles.emptyState}>
+                                        <MessageSquare size={48} color={COLORS.border} />
+                                        <Text style={styles.emptyText}>Waiting for Command Center instructions...</Text>
+                                    </View>
+                                }
+                            />
                         )}
 
-                        {/* Composer */}
-                        <SafeAreaView edges={['bottom']}>
+                        {/* Composer Area */}
+                        <View style={{ backgroundColor: COLORS.white }}>
                             <View style={styles.composerWrapper}>
                                 <View style={styles.inputContainer}>
                                     <TextInput
-                                        placeholder={isResolved ? "Chat disabled: Case finalized." : sosId === 'pending' ? "Securing connection..." : "Transmit message to operator..."}
-                                        style={[styles.input, (isResolved || sosId === 'pending') && styles.disabledInput]}
+                                        style={[styles.input, (!canTypeMessage && !isPendingLink) && styles.disabledInput]}
+                                        placeholder={isPendingLink ? "Type now. Message queues until linked..." : (!hasEstablishedLink ? "Establishing link..." : "Type emergency message...")}
                                         value={newMessage}
                                         onChangeText={setNewMessage}
                                         multiline
-                                        maxLength={500}
-                                        editable={!isResolved && sosId !== 'pending'}
+                                        placeholderTextColor={COLORS.textMuted}
+                                        editable={canTypeMessage}
                                     />
-                                    <TouchableOpacity
-                                        onPress={handleSendMessage}
-                                        disabled={!newMessage.trim() || sending || isResolved || sosId === 'pending'}
-                                        style={[
-                                            styles.sendBtn,
-                                            (!newMessage.trim() || sending || isResolved || sosId === 'pending') && styles.sendBtnDisabled
-                                        ]}
+                                    <TouchableOpacity 
+                                        onPress={handleSendMessage} 
+                                        disabled={sendDisabled}
+                                        style={[styles.sendBtn, sendDisabled && styles.sendBtnDisabled]}
                                     >
-                                        {sending ? (
-                                            <ActivityIndicator size="small" color={COLORS.white} />
-                                        ) : (
-                                            <Send size={20} color={COLORS.white} />
-                                        )}
+                                        {sending ? <ActivityIndicator color={COLORS.white} size="small" /> : <Send size={20} color={COLORS.white} />}
                                     </TouchableOpacity>
-
                                 </View>
                                 <View style={styles.safetyNotice}>
-                                    <Shield size={10} color={COLORS.textSecondary} />
-                                    <Text style={styles.safetyText}>End-to-End Encrypted Signal</Text>
+                                    <Shield color={COLORS.textSecondary} size={10} />
+                                    <Text style={styles.safetyText}>
+                                        {isPendingLink ? 'Message will send automatically once the SOS link is established' : 'Authenticated Secure Command Channel'}
+                                    </Text>
                                 </View>
                             </View>
-                        </SafeAreaView>
+                        </View>
                     </KeyboardAvoidingView>
                 </View>
-            </View>
+            </SafeAreaView>
         </Modal>
     );
 };
@@ -534,6 +626,11 @@ const styles = StyleSheet.create({
     listContent: {
         padding: 20,
         paddingBottom: 40,
+        flexGrow: 1,
+    },
+    messagesList: {
+        flex: 1,
+        minHeight: 0,
     },
     messageBubble: {
         maxWidth: '85%',
@@ -649,5 +746,15 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         textTransform: 'uppercase',
         letterSpacing: 0.5,
+        textAlign: 'center',
+        flexShrink: 1,
+    },
+    queuedMessageText: {
+        marginTop: 16,
+        fontSize: 10,
+        color: COLORS.accent,
+        fontWeight: '900',
+        letterSpacing: 1,
+        textTransform: 'uppercase',
     },
 });

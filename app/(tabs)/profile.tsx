@@ -1,6 +1,7 @@
 import { COLORS, SHADOWS } from '@/constants/Theme';
-import { registerForPushNotificationsAsync, savePushToken, sendTestNotification } from '@/lib/notifications';
-import { supabase } from '@/lib/supabase';
+import { useProfile } from '@/context/ProfileContext';
+import { sendTestNotification } from '@/lib/notifications';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -30,6 +31,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 export default function ProfileScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { profile: sharedProfile, refreshProfile } = useProfile();
     const [profile, setProfile] = useState<any>(null);
     const [stats, setStats] = useState({
         reports: 0,
@@ -71,27 +73,11 @@ export default function ProfileScreen() {
     const [deletionOtp, setDeletionOtp] = useState('');
     const [deletionLoading, setDeletionLoading] = useState(false);
 
-    useEffect(() => {
-        fetchProfile();
-        checkBiometrics();
-        setupNotifications();
-    }, [fetchProfile]);
-
     const checkBiometrics = async () => {
         const compatible = await LocalAuthentication.hasHardwareAsync();
         setIsBiometricSupported(compatible);
         const enrolled = await LocalAuthentication.isEnrolledAsync();
         setIsBiometricEnrolled(enrolled);
-    };
-
-    const setupNotifications = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-            const token = await registerForPushNotificationsAsync();
-            if (token) {
-                await savePushToken(session.user.id, token);
-            }
-        }
     };
 
     const handleAuthenticate = async () => {
@@ -104,7 +90,7 @@ export default function ProfileScreen() {
 
     const fetchProfile = useCallback(async () => {
         try {
-            const { data: { session } } = await supabase.auth.getSession();
+            const { data: { session } } = await getSessionSafely();
             if (!session?.user) {
                 router.replace('/auth/login');
                 return;
@@ -112,18 +98,9 @@ export default function ProfileScreen() {
 
             const userId = session.user.id;
 
-            // Fetch all data in parallel with robust error suppression
-            const [profileRes, reportsRes, resolvedRes, verifyRes, iqRes] = await Promise.allSettled([
-                supabase.from('profiles').select('*').eq('id', userId).single(),
-                supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId),
-                supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'Resolved'),
-                supabase.from('verifications').select('*', { count: 'exact', head: true }).eq('user_id', userId),
-                supabase.rpc('get_user_civic_intelligence', { target_user_id: userId })
-            ]);
+            const { data: profileData } = await supabase.from('profiles').select('*').eq('id', userId).single();
 
-            // 1. Handle Profile Data (Crucial)
-            if (profileRes.status === 'fulfilled' && profileRes.value.data) {
-                const profileData = profileRes.value.data;
+            if (profileData) {
                 setProfile(profileData);
                 setEditName(profileData.full_name || '');
                 setEditBio(profileData.bio || '');
@@ -139,11 +116,20 @@ export default function ProfileScreen() {
                 setEditName(fullName);
             }
 
-            // 2. Handle Stats (Resilient)
+            // Identity and settings are available now; slower civic counters load in the background.
+            setLoading(false);
+
+            const [reportsRes, verifyRes, iqRes] = await Promise.allSettled([
+                supabase.rpc('get_my_incidents'),
+                supabase.from('verifications').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+                supabase.rpc('get_user_civic_intelligence', { target_user_id: userId })
+            ]);
+
+            const ownReports = reportsRes.status === 'fulfilled' ? reportsRes.value.data || [] : [];
             const iq = iqRes.status === 'fulfilled' ? (iqRes.value.data?.[0] || {}) : {};
             setStats({
-                reports: reportsRes.status === 'fulfilled' ? reportsRes.value.count || 0 : 0,
-                resolved: resolvedRes.status === 'fulfilled' ? resolvedRes.value.count || 0 : 0,
+                reports: ownReports.length,
+                resolved: ownReports.filter((report: any) => ['Resolved', 'Closed', 'resolved', 'closed'].includes(report.status)).length,
                 verifications: verifyRes.status === 'fulfilled' ? verifyRes.value.count || 0 : 0,
                 score: iq.impact_score || 0,
                 velocity: iq.velocity || 0,
@@ -161,6 +147,18 @@ export default function ProfileScreen() {
             setLoading(false);
         }
     }, [router]);
+
+    useEffect(() => {
+        if (sharedProfile && !profile) {
+            setProfile(sharedProfile);
+            setEditName(sharedProfile.full_name || '');
+        }
+    }, [profile, sharedProfile]);
+
+    useEffect(() => {
+        fetchProfile();
+        checkBiometrics();
+    }, [fetchProfile]);
 
 
     const pickAvatar = async () => {
@@ -186,7 +184,7 @@ export default function ProfileScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
-            const fileName = `avatars/${user.id}/${Date.now()}.jpg`;
+            const fileName = `${user.id}/${Date.now()}.jpg`;
             
             // Note: In some Expo versions, fetching the blob is more reliable for Supabase uploads
             const response = await fetch(uri);
@@ -194,7 +192,7 @@ export default function ProfileScreen() {
 
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
+                .upload(fileName, blob, { contentType: 'image/jpeg', upsert: false });
 
             if (uploadError) throw uploadError;
 
@@ -209,6 +207,7 @@ export default function ProfileScreen() {
 
             if (updateError) throw updateError;
             setProfile((prev: any) => ({ ...prev, avatar_url: publicUrl }));
+            refreshProfile();
             Alert.alert('Success', 'Profile picture updated!');
 
         } catch (error: any) {
@@ -254,6 +253,7 @@ export default function ProfileScreen() {
                 emergency_contact_phone: emergencyPhone,
                 medical_conditions: medicalConditions
             }));
+            refreshProfile();
             
             setEditModalVisible(false);
             Alert.alert('Profile Saved', 'Your changes have been synchronized.');
@@ -282,20 +282,22 @@ export default function ProfileScreen() {
             if (profile) {
                 setProfile((prev: any) => ({ ...prev, [field]: newPrefs }));
             }
+            await refreshProfile();
         } catch (error: any) {
             console.error('Update preferences error:', error);
+            Alert.alert('Settings Update Failed', error.message || 'Please try again.');
         }
     };
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
         router.replace('/auth/login');
     };
 
     const handleRequestDeletion = async () => {
         setDeletionLoading(true);
         try {
-            const { data: { session } } = await supabase.auth.getSession();
+            const { data: { session } } = await getSessionSafely();
             if (!session) throw new Error('Not authenticated');
 
             const { data, error } = await supabase.functions.invoke('request-account-deletion', {
@@ -325,7 +327,7 @@ export default function ProfileScreen() {
         }
         setDeletionLoading(true);
         try {
-            const { data: { session } } = await supabase.auth.getSession();
+            const { data: { session } } = await getSessionSafely();
             if (!session) throw new Error('Not authenticated');
 
             const { data, error } = await supabase.functions.invoke('confirm-account-deletion', {
@@ -393,7 +395,7 @@ export default function ProfileScreen() {
                                         disabled={uploading}
                                         activeOpacity={0.9}
                                     >
-                                        {uploading || loading ? (
+                                        {uploading || (loading && !profile) ? (
                                             <View style={styles.profileImageSkeleton}>
                                                 <ActivityIndicator color={COLORS.white} />
                                             </View>
@@ -410,7 +412,7 @@ export default function ProfileScreen() {
 
                                     <View style={styles.nameContainer}>
                                         <Text style={[styles.name, { color: COLORS.white }]}>
-                                            {loading ? <ActivityIndicator size="small" color={COLORS.white} /> : (profile?.full_name || 'Citizen')}
+                                            {loading && !profile ? <ActivityIndicator size="small" color={COLORS.white} /> : (profile?.full_name || 'Citizen')}
                                         </Text>
                                         <View style={styles.badgeRow}>
                                             <View style={[styles.verifiedTag, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
@@ -799,6 +801,7 @@ export default function ProfileScreen() {
                                                 {[
                                                     { label: '30s', value: 30 },
                                                     { label: '1m', value: 60 },
+                                                    { label: '30m', value: 1800 },
                                                     { label: 'Never', value: -1 }
                                                 ].map(opt => (
                                                     <TouchableOpacity
@@ -806,12 +809,12 @@ export default function ProfileScreen() {
                                                         onPress={() => handleUpdatePrefs('auto_sign_out_timeout', opt.value, 'privacy')}
                                                         style={[
                                                             styles.timeoutOption,
-                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 30) === opt.value && styles.timeoutOptionActive
+                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 1800) === opt.value && styles.timeoutOptionActive
                                                         ]}
                                                     >
                                                         <Text style={[
                                                             styles.timeoutText,
-                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 30) === opt.value && styles.timeoutTextActive
+                                                            (profile?.privacy_settings?.auto_sign_out_timeout ?? 1800) === opt.value && styles.timeoutTextActive
                                                         ]}>{opt.label}</Text>
                                                     </TouchableOpacity>
                                                 ))}

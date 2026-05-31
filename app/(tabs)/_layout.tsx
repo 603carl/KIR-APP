@@ -1,5 +1,5 @@
 import { COLORS, SHADOWS } from '@/constants/Theme';
-import { supabase } from '@/lib/supabase';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import { Tabs } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { Bell, FileText, Home, Plus, User } from 'lucide-react-native';
@@ -24,52 +24,80 @@ export default function TabLayout() {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    fetchUnreadCount();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Real-time subscription for notifications & Local Sync
-    const channel = supabase.channel('notification-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-        fetchUnreadCount();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
-        fetchUnreadCount();
-      })
-      .on('broadcast', { event: 'refresh-unread-count' }, () => {
-        fetchUnreadCount();
-      })
-      .subscribe();
+    const subscribe = async () => {
+      const { data: { session } } = await getSessionSafely();
+      if (cancelled || !session?.user) return;
+
+      await fetchUnreadCount();
+
+      // Personal notifications must never cause refresh work on other users' devices.
+      channel = supabase.channel('notification-sync')
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${session.user.id}`,
+        }, () => {
+          fetchUnreadCount();
+        })
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, () => {
+          fetchUnreadCount();
+        })
+        .on('broadcast', { event: 'refresh-unread-count' }, () => {
+          fetchUnreadCount();
+        })
+        .subscribe();
+    };
+
+    subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
   const fetchUnreadCount = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await getSessionSafely();
+      const user = session?.user;
       if (!user) return;
 
       // Get acknowledged broadcast IDs from local storage
       let acknowledgedIds: string[] = [];
       let deletedIds: string[] = [];
+      let thresholdISO = new Date(0).toISOString(); // Default to beginning of time if logic fails
+
       try {
-        const [storedAck, storedDel] = await Promise.all([
+        const [storedAck, storedDel, lastCleared] = await Promise.all([
           SecureStore.getItemAsync('acknowledged_broadcasts'),
-          SecureStore.getItemAsync('deleted_notifications')
+          SecureStore.getItemAsync('deleted_notifications'),
+          SecureStore.getItemAsync('last_alerts_cleared_at')
         ]);
         if (storedAck) acknowledgedIds = JSON.parse(storedAck);
         if (storedDel) deletedIds = JSON.parse(storedDel);
+        
+        // Calculate the 7-day "Latest" threshold
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const installDateStr = await SecureStore.getItemAsync('install_date');
+        const installDate = installDateStr ? new Date(installDateStr) : new Date(user.created_at);
+        
+        let thresholdDate = installDate > sevenDaysAgo ? installDate : sevenDaysAgo;
+        
+        // Respect the "Clear All" timestamp
+        if (lastCleared) {
+          const lastClearedDate = new Date(lastCleared);
+          if (lastClearedDate > thresholdDate) {
+            thresholdDate = lastClearedDate;
+          }
+        }
+        
+        thresholdISO = thresholdDate.toISOString();
       } catch (e) { }
-
-      // Calculate the 7-day "Latest" threshold (same as Alerts screen)
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      const installDateStr = await SecureStore.getItemAsync('install_date');
-      const installDate = installDateStr ? new Date(installDateStr) : new Date(user.created_at);
-      
-      // Use the more recent of (install date, 7 days ago)
-      const thresholdDate = installDate > sevenDaysAgo ? installDate : sevenDaysAgo;
-      const thresholdISO = thresholdDate.toISOString();
 
       // Fetch unread IDs to filter deleted ones
       // Logic: ONLY fetch unread since threshold (strict 7 days)

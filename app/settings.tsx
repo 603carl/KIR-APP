@@ -35,26 +35,26 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { MotiView } from 'moti';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 export default function SettingsScreen() {
     const router = useRouter();
-    const { profile, loading: profileLoading } = useProfile();
+    const { profile, loading: profileLoading, refreshProfile } = useProfile();
     const [notifications, setNotifications] = useState(true);
-    const [darkMode, setDarkMode] = useState(false);
-    const [biometrics, setBiometrics] = useState(true);
+    const [criticalAlerts, setCriticalAlerts] = useState(true);
+    const [biometrics, setBiometrics] = useState(false);
     const [stats, setStats] = useState({ reports: 0, resolved: 0 });
 
     useEffect(() => {
         const fetchStats = async () => {
             if (!profile?.id) return;
             try {
-                const [reportsRes, resolvedRes] = await Promise.all([
-                    supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', profile.id),
-                    supabase.from('incidents').select('*', { count: 'exact', head: true }).eq('user_id', profile.id).in('status', ['Resolved', 'Closed', 'resolved', 'closed'])
-                ]);
+                const { data: ownReports, error } = await supabase.rpc('get_my_incidents');
+                if (error) throw error;
+                const reports = ownReports || [];
                 setStats({
-                    reports: reportsRes.count || 0,
-                    resolved: resolvedRes.count || 0
+                    reports: reports.length,
+                    resolved: reports.filter((report: any) => ['Resolved', 'Closed', 'resolved', 'closed'].includes(report.status)).length
                 });
             } catch (err) {
                 console.error('Error fetching stats:', err);
@@ -62,6 +62,49 @@ export default function SettingsScreen() {
         };
         fetchStats();
     }, [profile?.id]);
+
+    useEffect(() => {
+        setNotifications(profile?.notification_prefs?.push !== false);
+        setCriticalAlerts(profile?.notification_prefs?.emergency !== false);
+        setBiometrics(profile?.privacy_settings?.biometric_lock === true);
+    }, [profile?.notification_prefs, profile?.privacy_settings]);
+
+    const updatePreference = async (
+        field: 'notification_prefs' | 'privacy_settings',
+        key: string,
+        value: boolean
+    ) => {
+        if (!profile?.id) return;
+        const current = (profile as any)?.[field] || {};
+        const { error } = await supabase
+            .from('profiles')
+            .update({ [field]: { ...current, [key]: value } })
+            .eq('id', profile.id);
+        if (error) {
+            Alert.alert('Settings Update Failed', error.message);
+            await refreshProfile();
+            return;
+        }
+        await refreshProfile();
+    };
+
+    const handleBiometricsChange = async (enabled: boolean) => {
+        if (enabled) {
+            const hasHardware = await LocalAuthentication.hasHardwareAsync();
+            const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+            if (!hasHardware || !isEnrolled) {
+                Alert.alert('Biometrics Unavailable', 'Set up fingerprint or face authentication on this phone first.');
+                return;
+            }
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Enable biometric app lock',
+                fallbackLabel: 'Use Passcode',
+            });
+            if (!result.success) return;
+        }
+        setBiometrics(enabled);
+        await updatePreference('privacy_settings', 'biometric_lock', enabled);
+    };
 
     const handleLogout = async () => {
         Alert.alert(
@@ -73,7 +116,7 @@ export default function SettingsScreen() {
                     text: 'Logout', 
                     style: 'destructive',
                     onPress: async () => {
-                        await supabase.auth.signOut();
+                        await supabase.auth.signOut({ scope: 'local' });
                         router.replace('/auth/login');
                     }
                 }
@@ -230,18 +273,32 @@ export default function SettingsScreen() {
 
                     <Text style={styles.sectionHeader}>Preferences</Text>
                     <View style={styles.card}>
-                        <SettingRow icon={Bell} title="Push Notifications" value={notifications} onValueChange={setNotifications} />
+                        <SettingRow
+                            icon={Bell}
+                            title="Push Notifications"
+                            value={notifications}
+                            onValueChange={async (enabled: boolean) => {
+                                setNotifications(enabled);
+                                await updatePreference('notification_prefs', 'push', enabled);
+                            }}
+                        />
                         <View style={styles.divider} />
-                        <SettingRow icon={Smartphone} title="Aero Dark Mode" value={darkMode} onValueChange={setDarkMode} />
-                        <View style={styles.divider} />
-                        <SettingRow icon={Eye} title="Low Data Usage" value={false} />
+                        <SettingRow
+                            icon={Smartphone}
+                            title="Critical Alerts"
+                            value={criticalAlerts}
+                            onValueChange={async (enabled: boolean) => {
+                                setCriticalAlerts(enabled);
+                                await updatePreference('notification_prefs', 'emergency', enabled);
+                            }}
+                        />
                     </View>
 
                     <Text style={styles.sectionHeader}>Security</Text>
                     <View style={styles.card}>
-                        <SettingRow icon={Shield} title="Biometric Access" value={biometrics} onValueChange={setBiometrics} />
+                        <SettingRow icon={Shield} title="Biometric Access" value={biometrics} onValueChange={handleBiometricsChange} />
                         <View style={styles.divider} />
-                        <SettingRow icon={Shield} title="Update Password" type="link" />
+                        <SettingRow icon={Shield} title="Update Password" type="link" onPress={() => router.push('/auth/forgot-password')} />
                     </View>
 
                     <Text style={styles.sectionHeader}>System</Text>

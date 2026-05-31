@@ -6,7 +6,7 @@ const { withAndroidManifest } = require('@expo/config-plugins');
  * Modifies AndroidManifest.xml to:
  * 1. Allow MainActivity to show over the lockscreen and wake the screen
  * 2. Declare required permissions for FSI, wake lock, and foreground service
- * 3. Add receiver for boot-completed to re-register notification channels
+ * 3. Declare only permissions used by urgent notifications and screen wake-up
  */
 function withAndroidFullScreen(config) {
     return withAndroidManifest(config, (config) => {
@@ -41,11 +41,8 @@ function withAndroidFullScreen(config) {
             'android.permission.VIBRATE',
             'android.permission.FOREGROUND_SERVICE',
             'android.permission.RECEIVE_BOOT_COMPLETED',
-            'android.permission.SCHEDULE_EXACT_ALARM',
             'android.permission.POST_NOTIFICATIONS',
-            'android.permission.SYSTEM_ALERT_WINDOW',
             'android.permission.DISABLE_KEYGUARD',
-            'android.permission.FOREGROUND_SERVICE_SHORT_SERVICE',
         ];
 
         for (const perm of requiredPermissions) {

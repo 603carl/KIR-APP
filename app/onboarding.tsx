@@ -1,7 +1,7 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { LinearGradient } from 'expo-linear-gradient';
+import { setStartupItem } from '@/lib/startupStorage';
 import { Stack, useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import { ArrowRight } from 'lucide-react-native';
 import { MotiView } from 'moti';
@@ -61,13 +61,13 @@ export default function OnboardingScreen() {
         if (currentIndex < SLIDES.length - 1) {
             flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
         } else {
-            await SecureStore.setItemAsync('hasSeenOnboarding', 'true');
+            await setStartupItem('hasSeenOnboarding', 'true');
             router.replace('/auth/login');
         }
     };
 
     const handleSkip = async () => {
-        await SecureStore.setItemAsync('hasSeenOnboarding', 'true');
+        await setStartupItem('hasSeenOnboarding', 'true');
         router.replace('/auth/login');
     };
 

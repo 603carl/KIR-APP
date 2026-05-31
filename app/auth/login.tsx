@@ -1,6 +1,7 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { BlurView } from 'expo-blur';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -13,7 +14,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const { width, height } = Dimensions.get('window');
 
 // Configure Google Sign-In for native builds
-const WEB_CLIENT_ID = '751130763657-6s429sp824lsha2sdqp9ooler427hve2.apps.googleusercontent.com';
+const WEB_CLIENT_ID =
+    Constants.expoConfig?.extra?.googleWebClientId ||
+    '751130763657-6s429sp824lsha2sdqp9ooler427hve2.apps.googleusercontent.com';
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 let GoogleSignin: any = null;
 let statusCodes: any = null;
@@ -29,7 +33,9 @@ try {
         scopes: ['profile', 'email'],
     });
 } catch (e) {
-    console.log('Native Google Sign-In module not found (Required for in-app experience)');
+    if (!isExpoGo) {
+        console.warn('Native Google Sign-In is unavailable in this native build.');
+    }
 }
 
 export default function LoginScreen() {

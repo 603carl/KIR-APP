@@ -1,8 +1,9 @@
 import { SkeletonCard } from '@/components/SkeletonCard';
+import { useProfile } from '@/context/ProfileContext';
 import { BORDER_RADIUS, COLORS, FONT_SIZE, SHADOWS, SPACING } from '@/constants/Theme';
-import { supabase } from '@/lib/supabase';
+import { cacheKeys, readCache, writeCache } from '@/lib/clientCache';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import { normalizeCounty } from '@/lib/utils';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -22,7 +23,7 @@ import { MessageSquare, Shield, X as CloseIcon } from 'lucide-react-native';
 import { MotiView, AnimatePresence } from 'moti';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { SOSChatModal } from '@/components/SOSChatModal';
-import { Alert, Dimensions, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, AppState, Dimensions, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -45,6 +46,13 @@ interface Incident {
   status: string;
   media_urls: string[];
 }
+
+interface OpenSosResult {
+  id: string;
+  created: boolean;
+}
+
+const FEED_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
 // 0. Memoized Components for Ultra Fast Response
 const CategoryCard = React.memo(({ cat, isSelected, onPress }: { cat: any, isSelected: boolean, onPress: () => void }) => (
@@ -79,8 +87,10 @@ const IncidentCard = React.memo(({ item, index, onPress, timeAgo }: { item: Inci
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const { profile: sharedProfile } = useProfile();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cacheReady, setCacheReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -95,16 +105,28 @@ export default function DashboardScreen() {
   // Performance: Cache user to avoid repeated auth calls
   const cachedUser = useRef<any>(null);
   const isRequestingLocation = useRef(false);
+  const sosRequestSequence = useRef(0);
 
-  const CACHE_KEY_INCIDENTS = '@cached_incidents';
-  const CACHE_KEY_STATS = '@cached_stats';
+  // ─── Bug #7 Fix: Pending message queue ────────────────────────────────
+  // When SOS is triggered, activeSosId is immediately set to 'pending'
+  // for UI feedback. The DB insert can take 3-8s on slow networks.
+  // If the user tries to send a message in that window, handleSendMessage
+  // in the modal blocks them. Instead of discarding the message, we
+  // store it here. The modal's useEffect watches sosId and auto-sends
+  // this queued message the moment a real UUID arrives.
+  const pendingMessageRef = useRef<string | null>(null);
 
-  const loadCachedData = async () => {
+  const loadCachedData = async (userId: string) => {
     try {
-      const cachedIncidents = await AsyncStorage.getItem(CACHE_KEY_INCIDENTS);
-      const cachedStats = await AsyncStorage.getItem(CACHE_KEY_STATS);
-      if (cachedIncidents) setIncidents(JSON.parse(cachedIncidents));
-      if (cachedStats) setStats(JSON.parse(cachedStats));
+      const [cachedIncidents, cachedStats] = await Promise.all([
+        readCache<Incident[]>(cacheKeys.communityFeed(userId), FEED_CACHE_MAX_AGE_MS),
+        readCache<{ resolvedRate: string; trend: string }>(cacheKeys.communityStats(userId), FEED_CACHE_MAX_AGE_MS),
+      ]);
+      if (cachedIncidents) {
+        setIncidents(cachedIncidents);
+        setLoading(false);
+      }
+      if (cachedStats) setStats(cachedStats);
     } catch (e) {
       console.log('Error loading cache', e);
     }
@@ -112,31 +134,23 @@ export default function DashboardScreen() {
 
   // 1. Initial mounting tasks
   useEffect(() => {
-    loadCachedData().then(() => {
-      Promise.all([
-        fetchUser(),
-        fetchStats(),
-        checkLocationPermission()
-      ]);
-    });
-
-    const subscription = supabase
-      .channel('public:incidents')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'incidents' }, (payload) => {
-        const newIncident = payload.new as Incident;
-        setIncidents(prev => [newIncident, ...prev]);
-        fetchStats();
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'incidents' }, (payload) => {
-        const updated = payload.new as Incident;
-        setIncidents(prev => prev.map(inc => inc.id === updated.id ? updated : inc));
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    (async () => {
+      const { data: { session } } = await getSessionSafely();
+      if (session?.user) {
+        cachedUser.current = session.user;
+        await loadCachedData(session.user.id);
+      }
+      checkLocationPermission();
+      setCacheReady(true);
+    })();
   }, []);
+
+  useEffect(() => {
+    const displayName = sharedProfile?.full_name;
+    if (displayName && displayName !== 'Citizen') {
+      setUserName(displayName.split(' ')[0]);
+    }
+  }, [sharedProfile?.full_name]);
 
   // Track chat visibility via ref so realtime callbacks don't need effect re-runs
   const isChatVisibleRef = useRef(isChatVisible);
@@ -144,26 +158,22 @@ export default function DashboardScreen() {
 
   // 1.5 SOS Chat Sync & Active Detection — STABLE (runs once on mount)
   // We keep track of active subscriptions to avoid duplicates
-  const subscriptionsRef = useRef<{ alertSub: any, messageSub: any }>({ alertSub: null, messageSub: null });
+  const subscriptionsRef = useRef<{ sosSessionSub: any }>({ sosSessionSub: null });
 
   const clearSosListeners = useCallback(() => {
-    if (subscriptionsRef.current.alertSub) {
-      supabase.removeChannel(subscriptionsRef.current.alertSub);
-      subscriptionsRef.current.alertSub = null;
-    }
-    if (subscriptionsRef.current.messageSub) {
-      supabase.removeChannel(subscriptionsRef.current.messageSub);
-      subscriptionsRef.current.messageSub = null;
+    if (subscriptionsRef.current.sosSessionSub) {
+      supabase.removeChannel(subscriptionsRef.current.sosSessionSub);
+      subscriptionsRef.current.sosSessionSub = null;
     }
   }, []);
 
   const attachSosListeners = useCallback((sosId: string) => {
-    // Clear existing before attaching new ones
+    // Clear existing before attaching new one
     clearSosListeners();
 
-    // A. Listen for status changes (persistence) — STABLE channel
-    const alertSub = supabase
-      .channel(`sos_status:${sosId}`)
+    // Consolidated SOS Session Channel - High Performance
+    const sosSessionSub = supabase
+      .channel(`sos_session:${sosId}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'sos_alerts', filter: `id=eq.${sosId}` },
@@ -178,11 +188,6 @@ export default function DashboardScreen() {
           }
         }
       )
-      .subscribe();
-
-    // B. Listen for new operator messages — STABLE channel, uses ref for chat visibility
-    const messageSub = supabase
-      .channel(`sos_messages:${sosId}`)
       .on(
         'postgres_changes',
         {
@@ -201,120 +206,47 @@ export default function DashboardScreen() {
       )
       .subscribe();
 
-      subscriptionsRef.current = { alertSub, messageSub };
+    subscriptionsRef.current = { sosSessionSub };
   }, [clearSosListeners]);
 
-  useEffect(() => {
+  const checkActiveSos = useCallback(async () => {
+    const user = cachedUser.current || (await getSessionSafely()).data.session?.user;
+    if (!user) return;
+    if (!cachedUser.current) cachedUser.current = user;
 
-    const checkActiveSos = async () => {
-      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
-      if (!user) return;
-      if (!cachedUser.current) cachedUser.current = user;
+    // 1. Fetch MOST RECENT active SOS session
+    const { data: sosData } = await supabase
+      .from('sos_alerts')
+      .select('id, status')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-      // 1. Fetch MOST RECENT active SOS session
-      const { data: sosData } = await supabase
-        .from('sos_alerts')
-        .select('id, status')
-        .eq('user_id', user.id)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    if (sosData) {
+      setSosActive(true);
+      setActiveSosId(sosData.id);
+      
+      // 2. Fetch unread messages count for this SOS
+      const { count } = await supabase
+        .from('sos_messages' as any)
+        .select('*', { count: 'exact', head: true })
+        .eq('sos_id', sosData.id)
+        .neq('sender_role', 'citizen')
+        .is('is_read' as any, false);
+      
+      setUnreadCount(count || 0);
+      
+      attachSosListeners(sosData.id);
+    } else {
+      setSosActive(false);
+      setActiveSosId(null);
+      setUnreadCount(0);
+    }
+  }, [attachSosListeners]);
 
-      if (sosData) {
-        setSosActive(true);
-        setActiveSosId(sosData.id);
-        
-        // 2. Fetch unread messages count for this SOS
-        const { count } = await supabase
-          .from('sos_messages' as any)
-          .select('*', { count: 'exact', head: true })
-          .eq('sos_id', sosData.id)
-          .neq('sender_role', 'citizen')
-          .is('is_read' as any, false);
-        
-        setUnreadCount(count || 0);
-        
-        attachSosListeners(sosData.id);
-      } else {
-        setSosActive(false);
-        setActiveSosId(null);
-        setUnreadCount(0);
-      }
-    };
-
-    checkActiveSos();
-
-    // 1.7 Global Incident Feed Listener — STABLE
-    const incidentsSub = supabase
-      .channel('public_incidents_sync')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'incidents' },
-        () => {
-          console.log('[Realtime] Incidents update detected, refreshing feed...');
-          fetchIncidents();
-          fetchStats();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      clearSosListeners();
-      if (incidentsSub) supabase.removeChannel(incidentsSub);
-    };
-  }, [attachSosListeners, clearSosListeners]); // STABLE — no dependencies, channels stay alive
-
-  // 2. Fetch incidents (Debounced Search)
-  useEffect(() => {
-    const delayDebounceFn = setTimeout(() => {
-      fetchIncidents();
-    }, 400);
-
-    return () => clearTimeout(delayDebounceFn);
-  }, [searchQuery, selectedCategory]);
-
-  const fetchUser = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      cachedUser.current = user;
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', user.id)
-        .single();
-
-      if (profile?.full_name && profile.full_name !== 'Citizen') {
-        const namePart = profile.full_name.split(' ')[0];
-        setUserName(namePart);
-      } else {
-        const fullName = user.user_metadata?.full_name || user.user_metadata?.name || 'Citizen';
-        setUserName(fullName.split(' ')[0]);
-      }
-    } catch (e) { }
-  };
-
-  const fetchStats = async () => {
-    try {
-      // Use head:true for fast count queries
-      const { count: total } = await supabase.from('incidents').select('*', { count: 'exact', head: true });
-      const { count: resolved } = await supabase.from('incidents').select('*', { count: 'exact', head: true }).in('status', ['Resolved', 'Closed', 'resolved', 'closed']);
-
-      if (total && total > 0) {
-        const newStats = {
-          resolvedRate: `${((resolved || 0) / total * 100).toFixed(1)}%`,
-          trend: '+2.4%'
-        };
-        setStats(newStats);
-        AsyncStorage.setItem(CACHE_KEY_STATS, JSON.stringify(newStats));
-      }
-    } catch (e) { }
-  };
-
-  const checkLocationPermission = async () => {
+  const checkLocationPermission = useCallback(async () => {
     if (isRequestingLocation.current) return;
     isRequestingLocation.current = true;
     try {
@@ -322,19 +254,16 @@ export default function DashboardScreen() {
       if (currentStatus === 'granted') {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setUserLocation(loc);
-        // Only fetch if we didn't have location before
-        if (!userLocation) fetchIncidents();
       }
     } catch (e) {
     } finally {
       isRequestingLocation.current = false;
     }
-  };
+  }, []);
 
-  const fetchIncidents = async () => {
+  const fetchIncidents = useCallback(async () => {
     try {
-      // Use ref to avoid multiple auth calls
-      const user = cachedUser.current || (await supabase.auth.getUser()).data.user;
+      const user = cachedUser.current || (await getSessionSafely()).data.session?.user;
       if (!user) return;
       if (!cachedUser.current) cachedUser.current = user;
 
@@ -351,22 +280,66 @@ export default function DashboardScreen() {
         });
 
       if (error) throw error;
-      setIncidents(data || []);
+      const feed = (data || []) as Incident[];
+      const resolved = feed.filter(incident => ['Resolved', 'Closed', 'resolved', 'closed'].includes(incident.status)).length;
+      const nextStats = {
+        resolvedRate: feed.length ? `${(resolved / feed.length * 100).toFixed(1)}%` : '0%',
+        trend: 'Visible feed',
+      };
+      setIncidents(feed);
+      setStats(nextStats);
       if (!searchQuery && !selectedCategory) {
-        AsyncStorage.setItem(CACHE_KEY_INCIDENTS, JSON.stringify(data || []));
+        await Promise.all([
+          writeCache(cacheKeys.communityFeed(user.id), feed),
+          writeCache(cacheKeys.communityStats(user.id), nextStats),
+        ]);
       }
     } catch (error) {
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [userLocation, searchQuery, selectedCategory]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchIncidents();
-    fetchStats();
-  }, [userLocation, searchQuery, selectedCategory]);
+  }, [fetchIncidents]);
+
+  // Comprehensive Re-sync on App Resume
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      if (nextAppState === 'active') {
+        console.log('[Sync] App resumed. Triggering critical data refresh...');
+        checkActiveSos();
+        checkLocationPermission(); // Try to get fresh location
+        onRefresh(); // Refresh incident feed too
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [checkActiveSos, checkLocationPermission, onRefresh]);
+
+  useEffect(() => {
+    checkActiveSos();
+
+    // SOS operational sessions remain live so citizen/responder communication is immediate.
+    return () => {
+      clearSosListeners();
+    };
+  }, [checkActiveSos, clearSosListeners]);
+
+  // 2. Fetch incidents (Debounced Search)
+  useEffect(() => {
+    if (!cacheReady) return;
+    const delayDebounceFn = setTimeout(() => {
+      fetchIncidents();
+    }, 400);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [cacheReady, fetchIncidents, searchQuery, selectedCategory]);
+
 
   const getTimeAgo = (dateString: string) => {
     const now = new Date();
@@ -381,6 +354,31 @@ export default function DashboardScreen() {
 
   const [isSosThrottled, setIsSosThrottled] = useState(false);
   const sosThrottleRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resolveEmergencyLocation = useCallback(async () => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      throw new Error('Location access is required to send an SOS with your position.');
+    }
+
+    let position: Location.LocationObject;
+    try {
+      position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+    } catch (locationError) {
+      if (!userLocation) throw locationError;
+      position = userLocation;
+    }
+
+    const { latitude, longitude } = position.coords;
+    return {
+      position,
+      latitude,
+      longitude,
+      coordinateLabel: `GPS: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+    };
+  }, [userLocation]);
 
   const cancelSOS = useCallback(async () => {
     if (!activeSosId) return;
@@ -397,6 +395,7 @@ export default function DashboardScreen() {
 
     // If still in 'pending' state, no DB entry exists to cancel yet
     if (currentId === 'pending') {
+      sosRequestSequence.current += 1;
       console.log('[SOS] Cancelled before DB link was established.');
       return;
     }
@@ -444,14 +443,14 @@ export default function DashboardScreen() {
     setSosActive(true);
     setActiveSosId('pending'); 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    const requestSequence = ++sosRequestSequence.current;
     
     (async () => {
-      let currentSosId: string | null = null;
       try {
         const startTime = Date.now();
         
         // Use getSession for instant ID retrieval (no network call if alive)
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await getSessionSafely();
         const user = session?.user;
         
         if (!user) {
@@ -463,58 +462,65 @@ export default function DashboardScreen() {
         const userId = user?.id || (await supabase.auth.getUser()).data.user?.id;
         if (!userId) throw new Error('Failed to resolve User ID');
 
-        // 2. STAGE 1: SHOTGUN INSERT (Instant)
-        // We use low-accuracy coords if available to avoid waiting for GPS
-        const initialLat = userLocation?.coords.latitude || -1.2921;
-        const initialLng = userLocation?.coords.longitude || 36.8219;
+        // Capture a real emergency position before sending. Never transmit a
+        // fabricated fallback point for an SOS response workflow.
+        const emergencyLocation = await resolveEmergencyLocation();
+        setUserLocation(emergencyLocation.position);
+        if (requestSequence !== sosRequestSequence.current) return;
 
-        const { data: sosData, error: sosError } = await supabase.from('sos_alerts').insert({
-          user_id: userId,
-          lat: initialLat,
-          lng: initialLng,
-          location_name: 'Locating...',
-          status: 'active'
-        }).select().single();
+        const { data: rawSosData, error: sosError } = await supabase.rpc('open_sos_alert', {
+          p_lat: emergencyLocation.latitude,
+          p_lng: emergencyLocation.longitude,
+          p_location_name: emergencyLocation.coordinateLabel,
+          p_county: null,
+          p_sub_county: null,
+        }).single();
 
         if (sosError) throw sosError;
-        
-        currentSosId = sosData.id;
+        if (!rawSosData) throw new Error('SOS session could not be established.');
+        const sosData = rawSosData as OpenSosResult;
+
+        if (requestSequence !== sosRequestSequence.current) {
+          await supabase.from('sos_alerts').update({
+            status: 'cancelled',
+            resolved_at: new Date().toISOString(),
+          }).eq('id', sosData.id);
+          return;
+        }
+
         setActiveSosId(sosData.id);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        console.log(`[SOS] Shotgun transmitted in ${Date.now() - startTime}ms`);
+        console.log(`[SOS] Transmitted with GPS coordinates in ${Date.now() - startTime}ms`);
 
-        // 3. STAGE 2 & 3: BACKGROUND REFINEMENT (Non-blocking)
+        if (sosData.created) {
+          const { error: alertError } = await supabase.from('alerts').insert({
+            rule_name: 'SOS EMERGENCY',
+            message: `CRITICAL: SOS at ${emergencyLocation.coordinateLabel}`,
+            severity: 'critical',
+            user_id: userId,
+            sos_alert_id: sosData.id
+          });
+          if (alertError) {
+            console.warn('[SOS] Alert log insert failed after SOS transmission:', alertError.message);
+          }
+        }
+
+        // Reverse geocoding improves dispatch context, but Watch Command
+        // already has exact coordinates even when this enrichment fails.
         (async () => {
           try {
-            // A. Precision GPS (Wait up to 10s only)
-            const freshLoc = await Location.getCurrentPositionAsync({ 
-                accuracy: Location.Accuracy.Balanced,
-            });
-            setUserLocation(freshLoc);
-            
-            // B. Reverse Geocode
-            const geoRes = await Location.reverseGeocodeAsync(freshLoc.coords);
-            const address = geoRes?.[0] ? [geoRes[0].street, geoRes[0].district, geoRes[0].name].filter(Boolean).join(', ') : 'Kenya';
+            const geoRes = await Location.reverseGeocodeAsync(emergencyLocation.position.coords);
+            const addressParts = geoRes?.[0]
+              ? [geoRes[0].street, geoRes[0].district, geoRes[0].name].filter(Boolean)
+              : [];
+            const address = addressParts.length > 0 ? addressParts.join(', ') : emergencyLocation.coordinateLabel;
             const county = normalizeCounty(geoRes?.[0]?.region || geoRes?.[0]?.city || '');
 
-            // C. Final Sync
             await supabase.from('sos_alerts').update({
-              lat: freshLoc.coords.latitude,
-              lng: freshLoc.coords.longitude,
               location_name: address,
               county
             }).eq('id', sosData.id);
-
-            // D. System Alert for Dashboard
-            await supabase.from('alerts').insert({
-              rule_name: 'SOS EMERGENCY',
-              message: `CRITICAL: SOS at ${address}`,
-              severity: 'critical',
-              user_id: userId,
-              sos_alert_id: sosData.id
-            });
-            
-            console.log('[SOS] Accuracy enrichment complete');
+            console.log('[SOS] Address enrichment complete');
           } catch (enrichError) {
             console.warn('[SOS] Enrichment failed:', enrichError);
           }
@@ -523,11 +529,14 @@ export default function DashboardScreen() {
         console.error('[SOS] Terminal Failure:', error);
         setSosActive(false);
         setActiveSosId(null);
-        Alert.alert('SOS Failure', 'System link error. Please call emergency services.');
+        Alert.alert(
+          'Unable to Send SOS With Location',
+          'Your current position could not be captured. Enable location access and try again immediately, or call emergency services.'
+        );
       }
     })();
 
-  }, [sosActive, isSosThrottled, userLocation, cancelSOS]);
+  }, [sosActive, isSosThrottled, cancelSOS, resolveEmergencyLocation]);
 
   return (
     <View style={styles.container}>
@@ -568,9 +577,9 @@ export default function DashboardScreen() {
             <LinearGradient colors={['#064E3B', '#022C22']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.statsCard}>
               <View style={styles.statsContent}>
                 <View>
-                  <Text style={styles.statsLabel}>National Resolved</Text>
+                  <Text style={styles.statsLabel}>Feed Resolved</Text>
                   <Text style={styles.statsValue}>{stats.resolvedRate}</Text>
-                  <Text style={styles.statsTrend}>{stats.trend} this week</Text>
+                  <Text style={styles.statsTrend}>{stats.trend}</Text>
                 </View>
                 <TrendingUp color="#4ADE80" size={48} strokeWidth={3} />
               </View>
@@ -631,7 +640,7 @@ export default function DashboardScreen() {
                 <Text style={styles.aiBadgeText}>AI RANKED</Text>
               </MotiView>
             </View>
-            <View style={styles.liveIndicator}><View style={styles.dot} /><Text style={styles.liveText}>LIVE</Text></View>
+            <View style={styles.liveIndicator}><View style={styles.dot} /><Text style={styles.liveText}>REFRESHED</Text></View>
           </View>
 
           {loading && incidents.length === 0 ? (
@@ -694,6 +703,7 @@ export default function DashboardScreen() {
           onClose={() => setIsChatVisible(false)}
           sosId={activeSosId}
           onCancelSOS={cancelSOS}
+          pendingMessageRef={pendingMessageRef}
         />
       )}
     </View>

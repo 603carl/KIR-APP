@@ -1,5 +1,5 @@
 import { COLORS, SHADOWS, SPACING } from '@/constants/Theme';
-import { supabase } from '@/lib/supabase';
+import { getSessionSafely, supabase } from '@/lib/supabase';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
@@ -31,7 +31,8 @@ import {
     TouchableOpacity,
     View,
     Platform,
-    ActivityIndicator
+    ActivityIndicator,
+    AppState
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -199,29 +200,39 @@ export default function AlertsScreen() {
     const fetchNotifications = useCallback(async (isSilent = false) => {
         if (!isSilent) setLoading(true);
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const { data: { session } } = await getSessionSafely();
+            const user = session?.user;
             if (!user) return;
 
             // 1. Fetch install date & filters
-            const [installDate, storedAck, storedDel] = await Promise.all([
+            const [installDate, storedAck, storedDel, lastCleared] = await Promise.all([
                 SecureStore.getItemAsync('install_date'),
                 SecureStore.getItemAsync('acknowledged_broadcasts'),
-                SecureStore.getItemAsync('deleted_notifications')
+                SecureStore.getItemAsync('deleted_notifications'),
+                SecureStore.getItemAsync('last_alerts_cleared_at')
             ]);
             
-            // We only show alerts since install, but we also prune to "Latest" (last 7 days for read ones)
+            // 2. Determine the true history threshold
+            // We show alerts since (install_date OR 7 days ago) BUT ONLY since the last time the user clicked CLEAR.
             const installDateObj = installDate ? new Date(installDate) : new Date(user.created_at);
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
             
-            // Use the more recent of (install date, 7 days ago) as our history threshold
-            const historyThreshold = installDateObj > sevenDaysAgo ? installDateObj : sevenDaysAgo;
+            let historyThreshold = installDateObj > sevenDaysAgo ? installDateObj : sevenDaysAgo;
+            
+            if (lastCleared) {
+                const lastClearedDate = new Date(lastCleared);
+                if (lastClearedDate > historyThreshold) {
+                    historyThreshold = lastClearedDate;
+                }
+            }
+            
             const thresholdISO = historyThreshold.toISOString();
 
             const acknowledgedIds: string[] = storedAck ? JSON.parse(storedAck) : [];
             const deletedIds: string[] = storedDel ? JSON.parse(storedDel) : [];
 
-            // 2. Fetch Personal Notifications
+            // 3. Fetch Personal Notifications
             // Logic: ONLY fetch notifications since the history threshold (strict 7 days)
             const { data: personalData, error: personalError } = await supabase
                 .from('notifications')
@@ -245,7 +256,7 @@ export default function AlertsScreen() {
 
             if (broadcastError) throw broadcastError;
 
-            // 4. Map and Merge
+            // 5. Map and Merge
             const mappedNotifications: Notification[] = (personalData || [])
                 .filter(n => !deletedIds.includes(n.id))
                 .map(n => ({
@@ -272,7 +283,7 @@ export default function AlertsScreen() {
 
             setNotifications(merged);
             
-            // 5. Sync Unread Count to SecureStore (for TabLayout)
+            // 6. Sync Unread Count to SecureStore (for TabLayout)
             const unreadCount = merged.filter(n => !n.is_read).length;
             await SecureStore.setItemAsync('unread_alerts_count', unreadCount.toString());
             
@@ -287,24 +298,51 @@ export default function AlertsScreen() {
     useEffect(() => {
         fetchNotifications();
         
-        // Comprehensive sync for both types
-        const channel = supabase
-            .channel('alerts-screen-sync')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
+        // 1. AppState Resync (Critical for Background -> Active transition)
+        const appStateSub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                console.log('[Alerts] App resumed, refreshing...');
                 fetchNotifications(true);
-            })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts' }, () => {
-                fetchNotifications(true);
-            })
-            .subscribe();
+            }
+        });
 
-        return () => { supabase.removeChannel(channel); };
+        let cancelled = false;
+        let channel: ReturnType<typeof supabase.channel> | null = null;
+
+        // Personal notifications are row-scoped; official broadcasts remain globally visible.
+        const subscribe = async () => {
+            const { data: { session } } = await getSessionSafely();
+            if (cancelled || !session?.user) return;
+
+            channel = supabase
+                .channel('alerts-screen-sync')
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'notifications',
+                    filter: `user_id=eq.${session.user.id}`,
+                }, () => {
+                    fetchNotifications(true);
+                })
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'broadcasts' }, () => {
+                    fetchNotifications(true);
+                })
+                .subscribe();
+        };
+
+        subscribe();
+
+        return () => { 
+            cancelled = true;
+            appStateSub.remove();
+            if (channel) supabase.removeChannel(channel);
+        };
     }, [fetchNotifications]);
 
     const clearAllNotifications = async () => {
         try {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            const userRef = (await supabase.auth.getUser()).data.user?.id;
+            const userRef = (await getSessionSafely()).data.session?.user.id;
             if (!userRef) return;
 
             // Optimistic clear
@@ -319,11 +357,9 @@ export default function AlertsScreen() {
                 .delete()
                 .eq('user_id', userRef);
 
-            // 2. Track all cleared IDs as deleted locally so they don't reappear
-            const storedDel = await SecureStore.getItemAsync('deleted_notifications');
-            const previouslyDeleted = storedDel ? JSON.parse(storedDel) : [];
-            const newDeleted = Array.from(new Set([...previouslyDeleted, ...idsToClear]));
-            await SecureStore.setItemAsync('deleted_notifications', JSON.stringify(newDeleted));
+            // 2. Set the "Last Cleared" timestamp to NOW
+            const now = new Date().toISOString();
+            await SecureStore.setItemAsync('last_alerts_cleared_at', now);
 
             // 3. Update local state
             setNotifications([]);

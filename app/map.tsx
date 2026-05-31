@@ -27,6 +27,8 @@ const NAIROBI_COORDS = {
     longitudeDelta: 0.15,
 };
 
+const MAX_MAP_INCIDENTS = 250;
+
 // OpenStreetMap Tile Servers (FREE - No API Key Required)
 const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_HUMANITARIAN_URL = 'https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png';
@@ -67,18 +69,6 @@ export default function MapScreen() {
 
     useEffect(() => {
         initializeMap();
-
-        const subscription = supabase
-            .channel('map_realtime_updates')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, (payload) => {
-                console.log('Real-time update:', payload);
-                fetchIncidents();
-            })
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(subscription);
-        };
     }, []);
 
     useEffect(() => {
@@ -128,7 +118,9 @@ export default function MapScreen() {
                 .from('incidents')
                 .select('id, lat, lng, title, category, severity, location')
                 .not('lat', 'is', null)
-                .not('lng', 'is', null);
+                .not('lng', 'is', null)
+                .order('created_at', { ascending: false })
+                .limit(MAX_MAP_INCIDENTS);
 
             if (fetchError) throw fetchError;
 
@@ -339,7 +331,7 @@ export default function MapScreen() {
                 <View style={styles.bottomControls}>
                     <View style={styles.statsCard}>
                         <Text style={styles.statsNumber}>{filteredIncidents.length}</Text>
-                        <Text style={styles.statsLabel}>Active Incidents</Text>
+                        <Text style={styles.statsLabel}>Recent Incidents</Text>
                     </View>
 
                     <TouchableOpacity style={styles.locationBtn} onPress={centerOnUserLocation}>

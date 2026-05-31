@@ -2,200 +2,188 @@
 /// <reference types="https://esm.sh/@supabase/supabase-js@2" />
 /// <reference lib="deno.ns" />
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const TOKEN_BATCH_SIZE = 1000;
+const EXPO_CHUNK_SIZE = 100;
+const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v3';
+const LEGACY_TRIGGER_SECRET = 'kir_internal_pulse_2026';
+const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'content-type, x-internal-secret',
+};
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+});
 
 Deno.serve(async (req: Request) => {
+    if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+    if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+
     try {
-        // Enforce Authentication via Bearer JWT
-        const authHeader = req.headers.get('Authorization');
-        if (!authHeader) {
-            return new Response(JSON.stringify({ error: 'Unauthorized: Missing Authorization Header' }), {
-                headers: { 'Content-Type': 'application/json' },
-                status: 401,
-            });
-        }
-        
-        // Use anon key and auth header to securely verify the JWT natively
-        const authClient = createClient(
-            Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-            { global: { headers: { Authorization: authHeader } } }
-        );
-        const { data: authData, error: authError } = await authClient.auth.getUser();
-        if (authError || !authData.user) {
-            return new Response(JSON.stringify({ error: 'Unauthorized: Invalid or Expired JWT' }), {
-                headers: { 'Content-Type': 'application/json' },
-                status: 401,
-            });
+        // This endpoint is invoked by persisted-row database triggers only.
+        // Remove LEGACY_TRIGGER_SECRET after the database trigger and Edge secret are rotated together.
+        const expectedSecret = Deno.env.get('INTERNAL_BROADCAST_SECRET') || LEGACY_TRIGGER_SECRET;
+        if (req.headers.get('x-internal-secret') !== expectedSecret) {
+            return json({ error: 'Unauthorized trigger request' }, 401);
         }
 
         const payload = await req.json();
-        console.log('Push Payload Received:', JSON.stringify(payload));
+        const table = payload?.table;
+        const recordId = payload?.record?.id;
+        if (!recordId || (table !== 'broadcasts' && table !== 'sos_alerts')) {
+            return json({ error: 'Unsupported delivery event' }, 400);
+        }
 
-        const { table, record, type } = payload;
-        if (!record) throw new Error("No record found in payload");
-
-        // Use service role key for full access to profiles (bypasses RLS)
-        const supabase = createClient(
+        const adminClient = createClient(
             Deno.env.get('SUPABASE_URL') ?? '',
             Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
         );
 
-        let title = "";
-        let body = "";
-        let sound = "emergency_alert.wav";
-        const channelId = "emergency-broadcasts-v2";
+        const recordFields = table === 'broadcasts'
+            ? 'id, title, message, severity, expires_at'
+            : 'id, location_name, status';
+        const { data: record, error: recordError } = await adminClient
+            .from(table)
+            .select(recordFields)
+            .eq('id', recordId)
+            .single();
+        if (recordError || !record) return json({ error: 'Persisted alert record was not found' }, 404);
 
-        if (table === 'sos_alerts') {
-            if (type === 'UPDATE') {
-                if (record.status === 'acknowledged') {
-                    title = "🛡️ COMMAND INTERVENTION";
-                    body = "Watch Command has acknowledged your signal. Help is being dispatched.";
-                    sound = "default";
-                } else if (record.status === 'resolved') {
-                    title = "✅ CASE RESOLVED";
-                    body = "Command Center has marked this rescue operation as finalized.";
-                    sound = "default";
-                } else {
-                    return new Response(JSON.stringify({ success: true, reason: "Status update ignored" }));
-                }
-            } else {
-                title = "🚨 EMERGENCY SOS";
-                body = `SOS Signal: ${record.location_name || 'Emergency location'}. WATCH COMMAND ONLY ALERT.`;
-            }
-        } else {
-            title = `📢 ${record.title || 'Official Broadcast'}`;
-            body = record.message || '';
-            sound = record.severity === 'extreme' ? 'emergency_alert.wav' : 'default';
+        const isSos = table === 'sos_alerts';
+        const title = isSos ? 'EMERGENCY SOS' : `Emergency Alert: ${record.title || 'Official Broadcast'}`;
+        const body = isSos
+            ? `SOS Signal: ${record.location_name || 'Emergency location'}`
+            : record.message || '';
+        const severity = isSos ? 'extreme' : record.severity || 'extreme';
+        const sound = !isSos || severity === 'extreme' ? 'emergency_alert.wav' : 'default';
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const defaultLifetimeSeconds = isSos ? 5 * 60 : 24 * 60 * 60;
+        const expiration = !isSos && record.expires_at
+            ? Math.floor(new Date(record.expires_at).getTime() / 1000)
+            : nowSeconds + defaultLifetimeSeconds;
+        if (expiration <= nowSeconds) {
+            return json({ success: true, sent: 0, total: 0, target: isSos ? 'staff' : 'citizens', expired: true });
         }
+        const ttl = Math.max(60, Math.min(defaultLifetimeSeconds, expiration - nowSeconds));
+        let lastId: string | null = null;
+        let totalSent = 0;
+        let totalTokens = 0;
+        let totalFailed = 0;
 
-        const pageSize = 10000;
-        let start = 0;
-        let hasMore = true;
-        let totalSentCount = 0;
-        let totalTokensFound = 0;
-        const errors: string[] = [];
+        while (true) {
+            let recipients: Array<{ id: string; push_token: string | null }> = [];
+            let pageLength = 0;
 
-        while (hasMore) {
-            let tokens: string[] = [];
-            const end = start + pageSize - 1;
+            if (isSos) {
+                let staffQuery = adminClient
+                    .from('employees')
+                    .select('id')
+                    .not('id', 'is', null)
+                    .order('id', { ascending: true })
+                    .limit(TOKEN_BATCH_SIZE);
+                if (lastId) staffQuery = staffQuery.gt('id', lastId);
 
-            if (table === 'sos_alerts') {
-                const { data: staffData, error: staffError } = await supabase
-                    .from('profiles')
-                    .select('push_token')
-                    .in('role', ['admin', 'responder', 'staff'])
-                    .not('push_token', 'is', null)
-                    .range(start, end);
-
+                const { data: staff, error: staffError } = await staffQuery;
                 if (staffError) throw staffError;
-                tokens = staffData ? staffData.map((p: any) => p.push_token).filter(Boolean) : [];
-            } else {
-                const { data: allProfiles, error: profileError } = await supabase
+                if (!staff || staff.length === 0) break;
+
+                lastId = staff[staff.length - 1].id;
+                pageLength = staff.length;
+                const staffIds = staff.map((employee: { id: string }) => employee.id);
+                const { data: staffProfiles, error: staffProfilesError } = await adminClient
                     .from('profiles')
-                    .select('push_token')
-                    .not('push_token', 'is', null)
-                    .range(start, end);
-
-                if (profileError) throw profileError;
-                tokens = allProfiles ? allProfiles.map((p: any) => p.push_token).filter(Boolean) : [];
-            }
-
-            if (tokens.length === 0) {
-                hasMore = false;
-                break;
-            }
-
-            totalTokensFound += tokens.length;
-            console.log(`Processing DB batch ${start} to ${end}. Found ${tokens.length} tokens.`);
-
-            const messages = tokens.map(token => ({
-                to: token,
-                title,
-                body,
-                subtitle: table === 'sos_alerts' ? 'WATCH COMMAND' : 'Kenya Incident Reporter',
-                data: {
-                    broadcastId: record.id,
-                    type: table === 'sos_alerts' ? 'emergency' : 'broadcast',
-                    severity: record.severity || 'extreme',
-                    title,
-                    message: body,
-                    lat: record.lat ?? null,
-                    lng: record.lng ?? null,
-                    isBroadcast: table === 'broadcasts',
-                },
-                sound,
-                priority: 'high',
-                channelId,
-                _contentAvailable: true,
-                mutableContent: true,
-                ttl: 0,
-                expiration: Math.floor(Date.now() / 1000) + 3600,
-                categoryId: 'emergency-broadcasts',
-            }));
-
-            // Send to Expo in chunks of 100
-            const chunkSize = 100;
-            for (let i = 0; i < messages.length; i += chunkSize) {
-                const chunk = messages.slice(i, i + chunkSize);
-                try {
-                    const res = await fetch(EXPO_PUSH_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                        },
-                        body: JSON.stringify(chunk),
-                    });
-
-                    const responseText = await res.text();
-
-                    if (res.ok) {
-                        totalSentCount += chunk.length;
-                    } else {
-                        const errMsg = `Expo push chunk failed: ${responseText}`;
-                        console.error(errMsg);
-                        errors.push(errMsg);
-                    }
-                } catch (fetchError: any) {
-                    const errMsg = `Fetch error on chunk: ${fetchError.message}`;
-                    console.error(errMsg);
-                    errors.push(errMsg);
-                }
-            }
-
-            if (tokens.length < pageSize) {
-                hasMore = false;
+                    .select('id, push_token')
+                    .in('id', staffIds)
+                    .not('push_token', 'is', null);
+                if (staffProfilesError) throw staffProfilesError;
+                recipients = staffProfiles || [];
             } else {
-                start += pageSize;
+                let citizenQuery = adminClient
+                    .from('profiles')
+                    .select('id, push_token, notification_prefs')
+                    .not('push_token', 'is', null)
+                    .order('id', { ascending: true })
+                    .limit(TOKEN_BATCH_SIZE);
+                if (lastId) citizenQuery = citizenQuery.gt('id', lastId);
+
+                const { data: citizens, error: citizenError } = await citizenQuery;
+                if (citizenError) throw citizenError;
+                if (!citizens || citizens.length === 0) break;
+
+                lastId = citizens[citizens.length - 1].id;
+                pageLength = citizens.length;
+                recipients = citizens.filter((citizen: any) => citizen.notification_prefs?.emergency !== false);
             }
+
+            const tokens = recipients.map((recipient: any) => recipient.push_token).filter(Boolean);
+            totalTokens += tokens.length;
+
+            for (let index = 0; index < tokens.length; index += EXPO_CHUNK_SIZE) {
+                const chunkTokens = tokens.slice(index, index + EXPO_CHUNK_SIZE);
+                const chunk = chunkTokens.map((token: string) => ({
+                    to: token,
+                    title,
+                    body,
+                    subtitle: 'Kenya Incident Reporter',
+                    data: {
+                        broadcastId: record.id,
+                        type: isSos ? 'emergency' : 'broadcast',
+                        severity,
+                        title,
+                        message: body,
+                        isBroadcast: !isSos,
+                    },
+                    sound,
+                    priority: 'high',
+                    channelId: EMERGENCY_CHANNEL_ID,
+                    _contentAvailable: true,
+                    mutableContent: true,
+                    ttl,
+                    expiration,
+                    categoryId: 'emergency-broadcasts',
+                }));
+
+                const response = await fetch(EXPO_PUSH_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                    body: JSON.stringify(chunk),
+                });
+                if (!response.ok) throw new Error(`Expo push delivery failed: ${await response.text()}`);
+                const result = await response.json();
+                const tickets = Array.isArray(result?.data) ? result.data : [];
+                const invalidTokens: string[] = [];
+                let failedInChunk = 0;
+
+                tickets.forEach((ticket: any, ticketIndex: number) => {
+                    if (ticket?.status === 'error') {
+                        failedInChunk += 1;
+                        if (ticket?.details?.error === 'DeviceNotRegistered' && chunkTokens[ticketIndex]) {
+                            invalidTokens.push(chunkTokens[ticketIndex]);
+                        }
+                    }
+                });
+
+                if (invalidTokens.length > 0) {
+                    await adminClient
+                        .from('profiles')
+                        .update({ push_token: null })
+                        .in('push_token', invalidTokens);
+                }
+
+                totalFailed += failedInChunk;
+                totalSent += chunk.length - failedInChunk;
+            }
+
+            if (pageLength < TOKEN_BATCH_SIZE) break;
         }
 
-        if (totalTokensFound === 0) {
-            console.log("No push tokens found to notify");
-            return new Response(JSON.stringify({ success: true, sent: 0, total: 0, reason: "No tokens found" }), {
-                headers: { 'Content-Type': 'application/json' },
-                status: 200,
-            });
-        }
-
-        console.log(`Push delivery complete: ${totalSentCount}/${totalTokensFound} sent`);
-        return new Response(JSON.stringify({
-            success: errors.length === 0,
-            sent: totalSentCount,
-            total: totalTokensFound,
-            errors: errors.length > 0 ? errors : undefined,
-        }), {
-            headers: { 'Content-Type': 'application/json' },
-        });
-
+        return json({ success: true, sent: totalSent, failed: totalFailed, total: totalTokens, target: isSos ? 'staff' : 'citizens' });
     } catch (error: any) {
-        console.error('Push Error:', error.message);
-        return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
+        console.error('Push delivery error:', error.message);
+        return json({ error: 'Push delivery failed' }, 500);
     }
 });

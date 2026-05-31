@@ -4,7 +4,7 @@ import { normalizeCounty } from '@/lib/utils';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLocation from 'expo-location';
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 import {
     AlertCircle,
     ArrowLeft,
@@ -13,6 +13,7 @@ import {
     CheckCircle2,
     ChevronRight,
     Droplets,
+    FileLock2,
     HeartPulse,
     LocateFixed,
     MapPin,
@@ -29,6 +30,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 const { width } = Dimensions.get('window');
 
 const CATEGORIES = [
+    { id: 'police-report', title: 'Police Report', icon: FileLock2, color: '#006B3E', desc: 'Confidential complaint with secure OB receipt workflow' },
     { id: '1', title: 'Water & Sanitation', icon: Droplets, color: '#3B82F6', desc: 'Pipe leaks, drainage, water shortage' },
     { id: '2', title: 'Roads & Transport', icon: Truck, color: '#10B981', desc: 'Potholes, street lights, accidents' },
     { id: '3', title: 'Power & Utility', icon: Zap, color: '#F59E0B', desc: 'Power outage, fallen cables, gas' },
@@ -65,6 +67,22 @@ export default function ReportScreen() {
     // Safety: Log mount and ensure insets are valid
     React.useEffect(() => {
         console.log('[ReportScreen] Mounted');
+        let cancelled = false;
+        supabase.auth.getUser().then(async ({ data: { user } }) => {
+            if (!user || cancelled) return;
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('privacy_settings')
+                .eq('id', user.id)
+                .single();
+            if (!cancelled && profile?.privacy_settings?.anonymous_reporting === true) {
+                setIsAnonymous(true);
+            }
+        }).catch((error) => console.warn('[ReportScreen] Unable to load anonymity default:', error));
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     const safeInsets = {
@@ -260,6 +278,10 @@ export default function ReportScreen() {
                                     key={cat.id}
                                     style={[styles.catCard, selectedCat === cat.id && styles.catCardActive]}
                                     onPress={() => {
+                                        if (cat.id === 'police-report') {
+                                            router.push('/police-report/new' as Href);
+                                            return;
+                                        }
                                         setSelectedCat(cat.id);
                                         setTimeout(handleNext, 50);
                                     }}
