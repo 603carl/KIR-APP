@@ -7,6 +7,14 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+const NON_POLICE_DESKS = new Set(['power & energy', 'water', 'roads', 'health', 'infrastructure']);
+
+function cleanPoliceDesk(value?: string | null) {
+    const trimmed = value?.trim();
+    if (!trimmed || NON_POLICE_DESKS.has(trimmed.toLowerCase())) return '';
+    return trimmed;
+}
+
 export default function MyPoliceReports() {
     const router = useRouter();
     const [reports, setReports] = useState<PoliceReport[]>([]);
@@ -56,7 +64,7 @@ export default function MyPoliceReports() {
             renderItem={({ item }) => <TouchableOpacity style={styles.card} onPress={() => router.push(`/police-report/${item.id}` as Href)}>
                 <View style={styles.row}><ShieldCheck color={COLORS.primary} size={20} /><Text style={styles.reference}>{item.submission_reference}</Text><Text style={styles.status}>{item.status.replace(/_/g, ' ').toUpperCase()}</Text></View>
                 <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.meta}>{item.current_station || item.preferred_station}{item.current_division ? ` / ${item.current_division}` : ''} | {new Date(item.created_at).toLocaleDateString('en-KE')}</Text>
+                <Text style={styles.meta}>{item.current_station || item.preferred_station}{cleanPoliceDesk(item.current_division) ? ` / ${cleanPoliceDesk(item.current_division)}` : ''} | {new Date(item.created_at).toLocaleDateString('en-KE')}</Text>
                 <View style={styles.ob}><Text style={styles.obText}>OB Number: {item.ob_number || 'Pending Official Recording'}</Text><ChevronRight size={16} color={COLORS.primary} /></View>
             </TouchableOpacity>}
         />

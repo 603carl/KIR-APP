@@ -22,8 +22,6 @@ export default function PoliceReportDetail() {
     const [sending, setSending] = useState(false);
     const [uploadingEvidence, setUploadingEvidence] = useState(false);
     const lifecycleDocuments = useMemo(() => selectLifecycleDocuments(documents), [documents]);
-    const recentEvents = events.slice(0, 3);
-    const olderEvents = events.slice(3);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -119,21 +117,20 @@ export default function PoliceReportDetail() {
                 <Text style={styles.caseTitle}>{report.title}</Text>
                 <Text style={styles.status}>{report.status.replace(/_/g, ' ').toUpperCase()}</Text>
                 <Text style={styles.ob}>OB Number: {report.ob_number || 'Pending Official Recording'}</Text>
-                <Text style={styles.small}>{report.current_station || report.preferred_station}{report.current_division ? ` / ${report.current_division}` : ''} | {new Date(report.created_at).toLocaleString('en-KE')}</Text>
+                <Text style={styles.small}>{report.current_station || report.preferred_station}{cleanPoliceDesk(String(report.current_division || '')) ? ` / ${cleanPoliceDesk(String(report.current_division || ''))}` : ''} | {new Date(report.created_at).toLocaleString('en-KE')}</Text>
             </View>
             <Section title="Your Statement"><Text style={styles.paragraph}>{report.detailed_statement}</Text><Text style={styles.small}>Occurrence: {report.occurrence_location}</Text></Section>
             <Section title="Current Handling">
                 <Text style={styles.listText}>Station: {report.current_station || report.receiving_station || report.preferred_station}</Text>
-                <Text style={styles.listText}>Division: {report.current_division || report.receiving_division || 'Pending assignment'}</Text>
-                <Text style={styles.listText}>Referral: {report.referred_to_station ? `${report.referred_to_station}${report.referred_to_division ? ` / ${report.referred_to_division}` : ''}` : 'No referral recorded'}</Text>
+                <Text style={styles.listText}>Police desk: {displayPoliceDesk(String(report.current_division || report.receiving_division || ''))}</Text>
+                <Text style={styles.listText}>Referral: {report.referred_to_station ? `${report.referred_to_station}${cleanPoliceDesk(String(report.referred_to_division || '')) ? ` / ${cleanPoliceDesk(String(report.referred_to_division || ''))}` : ''}` : 'No referral recorded'}</Text>
                 {report.referral_reason ? <Text style={styles.small}>Referral note: {report.referral_reason}</Text> : null}
             </Section>
             <Section title="Confidential Documents">
                 {lifecycleDocuments.length === 0 && <Text style={styles.small}>No confidential receipt documents have been issued yet.</Text>}
                 {lifecycleDocuments.map((document) => <TouchableOpacity key={document.id} style={styles.document} onPress={() => download(document)}>
-                    <FileLock2 color={COLORS.primary} size={20} /><View style={{ flex: 1 }}><Text style={styles.documentName}>{POLICE_DOCUMENT_LABELS[document.document_type]}</Text><Text style={styles.small}>Version {document.version}</Text></View><Download color={COLORS.primary} size={18} />
+                    <FileLock2 color={COLORS.primary} size={20} /><View style={{ flex: 1 }}><Text style={styles.documentName}>{POLICE_DOCUMENT_LABELS[document.document_type]}</Text></View><Download color={COLORS.primary} size={18} />
                 </TouchableOpacity>)}
-                {documents.length > lifecycleDocuments.length && <Text style={styles.small}>Older superseded document versions are retained securely and hidden from this view.</Text>}
             </Section>
             <Section title="Private Evidence">
                 {items.length > 0
@@ -151,11 +148,10 @@ export default function PoliceReportDetail() {
             </Section>
             <Section title="Status Timeline">
                 {events.length === 0 && <Text style={styles.small}>No status activity has been recorded yet.</Text>}
-                {recentEvents.map((event) => <TimelineEvent key={event.id} event={event} />)}
-                {olderEvents.length > 0 && <ScrollView style={styles.timelineOverflow} nestedScrollEnabled>
-                    {olderEvents.map((event) => <TimelineEvent key={event.id} event={event} />)}
+                {events.length > 0 && <ScrollView style={styles.timelineOverflow} nestedScrollEnabled>
+                    {events.map((event) => <TimelineEvent key={event.id} event={event} />)}
                 </ScrollView>}
-                {olderEvents.length > 0 && <Text style={styles.small}>Showing latest 3 updates. Scroll the timeline box for older status logs.</Text>}
+                {events.length > 2 && <Text style={styles.small}>Showing the latest updates first. Scroll for older status logs.</Text>}
             </Section>
         </ScrollView>
     </SafeAreaView>;
@@ -163,9 +159,9 @@ export default function PoliceReportDetail() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
 
 const POLICE_DOCUMENT_LABELS: Record<PoliceDocument['document_type'], string> = {
-    submission_receipt: 'Submission Receipt',
-    reviewed_receipt: 'Reviewed / Assigned Receipt',
-    closure_report: 'Case Closure Report',
+    submission_receipt: 'Initial Police Report Receipt',
+    reviewed_receipt: 'Official Police Handling Receipt',
+    closure_report: 'Final Police Case Closure Report',
 };
 
 const POLICE_DOCUMENT_ORDER: PoliceDocument['document_type'][] = ['submission_receipt', 'reviewed_receipt', 'closure_report'];
@@ -197,6 +193,18 @@ function TimelineEvent({ event }: { event: PoliceEvent }) {
     return <View style={styles.event}><MessageCircle size={14} color={COLORS.primary} /><Text style={styles.eventText}>{event.event_type.replace(/_/g, ' ')} | {new Date(event.created_at).toLocaleString('en-KE')}</Text></View>;
 }
 
+const NON_POLICE_DESKS = new Set(['power & energy', 'water', 'roads', 'health', 'infrastructure']);
+
+function cleanPoliceDesk(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed || NON_POLICE_DESKS.has(trimmed.toLowerCase())) return '';
+    return trimmed;
+}
+
+function displayPoliceDesk(value: string) {
+    return cleanPoliceDesk(value) || 'Pending police desk assignment';
+}
+
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: COLORS.background }, header: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, padding: SPACING.lg, borderBottomColor: COLORS.border, borderBottomWidth: 1 },
     title: { fontSize: 19, fontWeight: '900', color: COLORS.text }, ref: { color: COLORS.primary, fontSize: 12, fontWeight: '800', marginTop: 3 }, body: { padding: SPACING.lg, paddingBottom: 38 },
@@ -212,6 +220,6 @@ const styles = StyleSheet.create({
     bubbleBy: { color: COLORS.primary, fontWeight: '900', fontSize: 10, marginBottom: 5 }, bubbleText: { color: COLORS.text, lineHeight: 19 },
     composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 9, marginTop: 8 }, messageInput: { flex: 1, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, minHeight: 48, maxHeight: 100, padding: 12, color: COLORS.text },
     send: { width: 48, height: 48, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' }, event: { flexDirection: 'row', gap: 8, paddingVertical: 6 },
-    timelineOverflow: { maxHeight: 132, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 10, marginTop: 6, marginBottom: 4 },
+    timelineOverflow: { maxHeight: 96, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 10, marginTop: 6, marginBottom: 4 },
     eventText: { color: COLORS.textSecondary, fontSize: 12, textTransform: 'capitalize' }, unavailable: { margin: 24, color: COLORS.text },
 });
