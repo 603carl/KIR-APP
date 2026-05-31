@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, Camera, Download, FileLock2, MessageCircle, Send, ShieldCheck } from 'lucide-react-native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -21,6 +21,9 @@ export default function PoliceReportDetail() {
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
     const [uploadingEvidence, setUploadingEvidence] = useState(false);
+    const lifecycleDocuments = useMemo(() => selectLifecycleDocuments(documents), [documents]);
+    const recentEvents = events.slice(0, 3);
+    const olderEvents = events.slice(3);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -126,9 +129,11 @@ export default function PoliceReportDetail() {
                 {report.referral_reason ? <Text style={styles.small}>Referral note: {report.referral_reason}</Text> : null}
             </Section>
             <Section title="Confidential Documents">
-                {documents.map((document) => <TouchableOpacity key={document.id} style={styles.document} onPress={() => download(document)}>
-                    <FileLock2 color={COLORS.primary} size={20} /><View style={{ flex: 1 }}><Text style={styles.documentName}>{document.document_type.replace(/_/g, ' ')}</Text><Text style={styles.small}>Version {document.version}</Text></View><Download color={COLORS.primary} size={18} />
+                {lifecycleDocuments.length === 0 && <Text style={styles.small}>No confidential receipt documents have been issued yet.</Text>}
+                {lifecycleDocuments.map((document) => <TouchableOpacity key={document.id} style={styles.document} onPress={() => download(document)}>
+                    <FileLock2 color={COLORS.primary} size={20} /><View style={{ flex: 1 }}><Text style={styles.documentName}>{POLICE_DOCUMENT_LABELS[document.document_type]}</Text><Text style={styles.small}>Version {document.version}</Text></View><Download color={COLORS.primary} size={18} />
                 </TouchableOpacity>)}
+                {documents.length > lifecycleDocuments.length && <Text style={styles.small}>Older superseded document versions are retained securely and hidden from this view.</Text>}
             </Section>
             <Section title="Private Evidence">
                 {items.length > 0
@@ -145,12 +150,53 @@ export default function PoliceReportDetail() {
                 <View style={styles.composer}><TextInput value={message} onChangeText={setMessage} placeholder="Send confidential information..." placeholderTextColor={COLORS.textMuted} style={styles.messageInput} multiline /><TouchableOpacity style={styles.send} onPress={send} disabled={sending}>{sending ? <ActivityIndicator color={COLORS.white} /> : <Send size={18} color={COLORS.white} />}</TouchableOpacity></View>
             </Section>
             <Section title="Status Timeline">
-                {events.map((event) => <View key={event.id} style={styles.event}><MessageCircle size={14} color={COLORS.primary} /><Text style={styles.eventText}>{event.event_type.replace(/_/g, ' ')} | {new Date(event.created_at).toLocaleString('en-KE')}</Text></View>)}
+                {events.length === 0 && <Text style={styles.small}>No status activity has been recorded yet.</Text>}
+                {recentEvents.map((event) => <TimelineEvent key={event.id} event={event} />)}
+                {olderEvents.length > 0 && <ScrollView style={styles.timelineOverflow} nestedScrollEnabled>
+                    {olderEvents.map((event) => <TimelineEvent key={event.id} event={event} />)}
+                </ScrollView>}
+                {olderEvents.length > 0 && <Text style={styles.small}>Showing latest 3 updates. Scroll the timeline box for older status logs.</Text>}
             </Section>
         </ScrollView>
     </SafeAreaView>;
 }
 function Section({ title, children }: { title: string; children: React.ReactNode }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
+
+const POLICE_DOCUMENT_LABELS: Record<PoliceDocument['document_type'], string> = {
+    submission_receipt: 'Submission Receipt',
+    reviewed_receipt: 'Reviewed / Assigned Receipt',
+    closure_report: 'Case Closure Report',
+};
+
+const POLICE_DOCUMENT_ORDER: PoliceDocument['document_type'][] = ['submission_receipt', 'reviewed_receipt', 'closure_report'];
+
+function selectLifecycleDocuments(documents: PoliceDocument[]) {
+    const latestByType = new Map<PoliceDocument['document_type'], PoliceDocument>();
+
+    for (const document of documents) {
+        const current = latestByType.get(document.document_type);
+        if (!current) {
+            latestByType.set(document.document_type, document);
+            continue;
+        }
+
+        const documentTime = new Date(document.created_at).getTime();
+        const currentTime = new Date(current.created_at).getTime();
+        if (document.version > current.version || (document.version === current.version && documentTime > currentTime)) {
+            latestByType.set(document.document_type, document);
+        }
+    }
+
+    return POLICE_DOCUMENT_ORDER.flatMap((type) => {
+        const document = latestByType.get(type);
+        return document ? [document] : [];
+    });
+}
+
+function TimelineEvent({ event }: { event: PoliceEvent }) {
+    return <View style={styles.event}><MessageCircle size={14} color={COLORS.primary} /><Text style={styles.eventText}>{event.event_type.replace(/_/g, ' ')} | {new Date(event.created_at).toLocaleString('en-KE')}</Text></View>;
+}
+
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: COLORS.background }, header: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, padding: SPACING.lg, borderBottomColor: COLORS.border, borderBottomWidth: 1 },
     title: { fontSize: 19, fontWeight: '900', color: COLORS.text }, ref: { color: COLORS.primary, fontSize: 12, fontWeight: '800', marginTop: 3 }, body: { padding: SPACING.lg, paddingBottom: 38 },
@@ -166,5 +212,6 @@ const styles = StyleSheet.create({
     bubbleBy: { color: COLORS.primary, fontWeight: '900', fontSize: 10, marginBottom: 5 }, bubbleText: { color: COLORS.text, lineHeight: 19 },
     composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 9, marginTop: 8 }, messageInput: { flex: 1, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, minHeight: 48, maxHeight: 100, padding: 12, color: COLORS.text },
     send: { width: 48, height: 48, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' }, event: { flexDirection: 'row', gap: 8, paddingVertical: 6 },
+    timelineOverflow: { maxHeight: 132, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 10, marginTop: 6, marginBottom: 4 },
     eventText: { color: COLORS.textSecondary, fontSize: 12, textTransform: 'capitalize' }, unavailable: { margin: 24, color: COLORS.text },
 });
