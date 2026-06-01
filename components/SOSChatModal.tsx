@@ -62,6 +62,22 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
     const channelRef = useRef<any>(null);
     const statusSubRef = useRef<any>(null);
 
+    const confirmCancelSOS = () => {
+        if (!onCancelSOS || isResolved) return;
+        Alert.alert(
+            'Cancel SOS?',
+            'Only cancel if you no longer need emergency assistance. Watch Command will be notified when an active SOS is cancelled.',
+            [
+                { text: 'Keep Active', style: 'cancel' },
+                {
+                    text: 'Cancel SOS',
+                    style: 'destructive',
+                    onPress: onCancelSOS,
+                },
+            ]
+        );
+    };
+
     // ─── Bug #7 Fix: Auto-flush queued message on sosId resolution ────
     // If the user typed a message while sosId was 'pending', it was blocked.
     // This effect fires when sosId transitions to a real UUID, auto-sending
@@ -399,6 +415,12 @@ export const SOSChatModal: React.FC<SOSChatModalProps> = ({ isVisible, onClose, 
                         </View>
                         
                         <View style={styles.headerActions}>
+                            {onCancelSOS && !isResolved && (
+                                <TouchableOpacity onPress={confirmCancelSOS} style={styles.cancelSOSButton}>
+                                    <AlertCircle color={COLORS.white} size={14} />
+                                    <Text style={styles.cancelSOSText}>CANCEL SOS</Text>
+                                </TouchableOpacity>
+                            )}
                             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
                                 <X color={COLORS.textSecondary} size={24} />
                             </TouchableOpacity>

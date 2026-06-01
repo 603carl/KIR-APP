@@ -10,7 +10,11 @@ import 'react-native-reanimated';
 
 import { EmergencyBroadcastOverlay, type BroadcastAlert } from '@/components/broadcast/EmergencyBroadcastOverlay';
 import { useColorScheme } from '@/components/useColorScheme';
-import { usePushNotifications } from '@/hooks/usePushNotifications';
+import {
+    canUseAndroidFullScreenIntent,
+    openAndroidFullScreenIntentSettings,
+    usePushNotifications,
+} from '@/hooks/usePushNotifications';
 import { getStartupItem, setStartupItem } from '@/lib/startupStorage';
 import { getSessionSafely, supabase } from '@/lib/supabase';
 import { ProfileProvider } from '@/context/ProfileContext';
@@ -251,8 +255,8 @@ export default function RootLayout() {
                 if (session?.user) {
                     await loadUserControls(session.user.id, true);
                     // Android 14+: Check FSI permission and prompt if needed
-                    if (Platform.OS === 'android' && Platform.Version >= 34) {
-                        promptForFSIPermission();
+                    if (!isExpoGo && Platform.OS === 'android' && Platform.Version >= 34) {
+                        void promptForFSIPermission();
                     }
                 }
 
@@ -466,30 +470,40 @@ export default function RootLayout() {
 // ─── Android 14+ FSI Permission Prompt ──────────────────────────────
 // On Android 14+, USE_FULL_SCREEN_INTENT is a special permission.
 // We guide the user to enable it in Settings if not already enabled.
-function promptForFSIPermission() {
-    // Check if we've already prompted
-    SecureStore.getItemAsync('fsi_permission_prompted').then((prompted) => {
-        if (prompted) return; // Already prompted once
+async function promptForFSIPermission() {
+    const canUseFullScreen = await canUseAndroidFullScreenIntent();
+    if (canUseFullScreen) return;
 
-        Alert.alert(
-            'Emergency Alert Permission',
-            'Android requires permission before this app may show urgent alerts over the lock screen. Enable "Full screen notifications" for the strongest visibility. Alarm sound notifications will still be used when this access is unavailable.',
-            [
-                { text: 'Later', style: 'cancel' },
-                {
-                    text: 'Open Settings',
-                    onPress: async () => {
-                        await SecureStore.setItemAsync('fsi_permission_prompted', 'true');
-                        try {
-                            await IntentLauncher.startActivityAsync('android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT', {
-                                data: `package:${Constants.expoConfig?.android?.package || 'com.publickenyaapp.kenyaincidentreport'}`
-                            });
-                        } catch {
-                            await Linking.openSettings();
-                        }
+    const lastPrompt = await SecureStore.getItemAsync('fsi_permission_prompted_at');
+    const lastPromptTime = lastPrompt ? Number(lastPrompt) : 0;
+    const promptCooldownMs = 24 * 60 * 60 * 1000;
+    if (lastPromptTime && Date.now() - lastPromptTime < promptCooldownMs) return;
+
+    Alert.alert(
+        'Emergency Alert Permission',
+        'Android requires full-screen notification access before this app can show broadcast alerts over the lock screen like a phone call. Enable "Full screen notifications" for the strongest emergency visibility. Alarm sound notifications will still be used if this access is unavailable.',
+        [
+            {
+                text: 'Later',
+                style: 'cancel',
+                onPress: () => SecureStore.setItemAsync('fsi_permission_prompted_at', String(Date.now())),
+            },
+            {
+                text: 'Open Settings',
+                onPress: async () => {
+                    await SecureStore.setItemAsync('fsi_permission_prompted_at', String(Date.now()));
+                    const openedNativeSettings = await openAndroidFullScreenIntentSettings();
+                    if (openedNativeSettings) return;
+
+                    try {
+                        await IntentLauncher.startActivityAsync('android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT', {
+                            data: `package:${Constants.expoConfig?.android?.package || 'com.publickenyaapp.kenyaincidentreport'}`
+                        });
+                    } catch {
+                        await Linking.openSettings();
                     }
-                },
-            ]
-        );
-    });
+                }
+            },
+        ]
+    );
 }

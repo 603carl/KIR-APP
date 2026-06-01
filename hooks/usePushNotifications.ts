@@ -32,6 +32,31 @@ if (!isExpoGo) {
 // ─── Notification Handler (Foreground) ───────────────────────────────
 // SINGLE source of truth for foreground notification handling.
 // Do NOT add another setNotificationHandler elsewhere (e.g. lib/notifications.ts).
+export async function canUseAndroidFullScreenIntent(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    if (isExpoGo || !RNIncomingCall?.canUseFullScreenIntent) return false;
+
+    try {
+        return await RNIncomingCall.canUseFullScreenIntent();
+    } catch (error) {
+        console.warn('[FSI] Permission check failed:', error);
+        return false;
+    }
+}
+
+export async function openAndroidFullScreenIntentSettings(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    if (isExpoGo || !RNIncomingCall?.openFullScreenIntentSettings) return false;
+
+    try {
+        await RNIncomingCall.openFullScreenIntentSettings();
+        return true;
+    } catch (error) {
+        console.warn('[FSI] Failed to open full-screen intent settings:', error);
+        return false;
+    }
+}
+
 if (Notifications) {
     Notifications.setNotificationHandler({
         handleNotification: async (notification: any) => {
@@ -39,7 +64,7 @@ if (Notifications) {
 
             // If it's a broadcast, trigger FSI on Android for maximum visibility
             if (Platform.OS === 'android' && data?.isBroadcast) {
-                triggerFullScreenAlert(data);
+                void triggerFullScreenAlert(data);
             }
 
             return {
@@ -76,7 +101,7 @@ if (!isExpoGo && Notifications) {
         // Trigger FSI for broadcast alerts (not SOS — SOS goes to Watch Command app)
         if (notificationData.isBroadcast && Platform.OS === 'android') {
             try {
-                triggerFullScreenAlert(notificationData);
+                await triggerFullScreenAlert(notificationData);
             } catch (fsiErr) {
                 // The native module bridge may not be fully initialized in background.
                 // In this case, the standard notification in the tray will still appear
@@ -97,7 +122,18 @@ if (!isExpoGo && Notifications) {
 // ─── Full-Screen Alert Trigger (Android Native) ──────────────────────
 // This uses the native Android FSI library to wake the screen,
 // play alarm, and show a full-screen UI even when locked
-function triggerFullScreenAlert(data: any) {
+function sanitizeBroadcastPayload(data: any) {
+    return {
+        broadcastId: data?.broadcastId ? String(data.broadcastId) : undefined,
+        title: data?.title ? String(data.title) : undefined,
+        message: data?.message ? String(data.message) : undefined,
+        severity: data?.severity ? String(data.severity) : undefined,
+        type: data?.type ? String(data.type) : 'broadcast',
+        isBroadcast: data?.isBroadcast === true || data?.isBroadcast === 'true',
+    };
+}
+
+async function triggerFullScreenAlert(data: any) {
     if (isExpoGo) return; // Native FSI not available in Expo Go
     try {
         const title = data.title || '📢 Emergency Broadcast';
@@ -116,10 +152,14 @@ function triggerFullScreenAlert(data: any) {
             declineText: 'DISMISS',
             notificationColor: '#FF0000',
             notificationSound: 'emergency_alert', // raw sound resource name
-            payload: JSON.stringify(data),
+            payload: sanitizeBroadcastPayload(data),
         };
 
         if (RNIncomingCall) {
+            const canUseFullScreen = await canUseAndroidFullScreenIntent();
+            if (!canUseFullScreen) {
+                console.warn('[FSI] Full-screen intent permission is not granted. Android will degrade to heads-up notification until the user enables it.');
+            }
             RNIncomingCall.displayNotification(
                 uuid,       // unique call ID
                 null,       // avatar URI (null = use default icon)

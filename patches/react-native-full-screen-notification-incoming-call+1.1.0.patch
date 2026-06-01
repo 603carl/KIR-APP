@@ -1,3 +1,88 @@
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/FullScreenNotificationIncomingCallModule.java b/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/FullScreenNotificationIncomingCallModule.java
+index 7f6e7af..653f72e 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/FullScreenNotificationIncomingCallModule.java
++++ b/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/FullScreenNotificationIncomingCallModule.java
+@@ -1,8 +1,12 @@
+ package com.reactnativefullscreennotificationincomingcall;
+ 
+ import android.app.Activity;
++import android.app.NotificationManager;
+ import android.content.Context;
+ import android.content.Intent;
++import android.net.Uri;
++import android.os.Build;
++import android.provider.Settings;
+ import android.util.Log;
+ import android.view.WindowManager;
+ 
+@@ -10,6 +14,8 @@ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ 
+ import com.facebook.react.bridge.ReadableMapKeySetIterator;
++import com.facebook.react.bridge.ReadableType;
++import com.facebook.react.bridge.Promise;
+ import com.facebook.react.bridge.ReactApplicationContext;
+ import com.facebook.react.bridge.ReactContextBaseJavaModule;
+ import com.facebook.react.bridge.ReactMethod;
+@@ -70,9 +76,11 @@ public class FullScreenNotificationIncomingCallModule extends ReactContextBaseJa
+       intent.putExtra("isVideo",isVideo);
+     }
+ 
+-    if (foregroundOptions.hasKey("payload")) {
++    if (foregroundOptions.hasKey("payload") && foregroundOptions.getType("payload") == ReadableType.Map) {
+       JSONObject payload = convertMapToJson(foregroundOptions.getMap("payload"));
+       intent.putExtra("payload", payload.toString());
++    } else if (foregroundOptions.hasKey("payload") && foregroundOptions.getType("payload") == ReadableType.String) {
++      intent.putExtra("payload", foregroundOptions.getString("payload"));
+     }
+     intent.setAction(Constants.ACTION_SHOW_INCOMING_CALL);
+     getReactApplicationContext().startService(intent);
+@@ -88,6 +96,45 @@ public class FullScreenNotificationIncomingCallModule extends ReactContextBaseJa
+     getReactApplicationContext().stopService(intent);
+   }
+ 
++  @ReactMethod
++  public void canUseFullScreenIntent(Promise promise) {
++    try {
++      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++        promise.resolve(true);
++        return;
++      }
++
++      NotificationManager notificationManager =
++        (NotificationManager) getReactApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
++      promise.resolve(notificationManager != null && notificationManager.canUseFullScreenIntent());
++    } catch (Exception e) {
++      promise.reject("FSI_PERMISSION_CHECK_FAILED", e);
++    }
++  }
++
++  @ReactMethod
++  public void openFullScreenIntentSettings(Promise promise) {
++    try {
++      Context context = getReactApplicationContext();
++      String packageName = context.getApplicationContext().getPackageName();
++      Intent intent;
++
++      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++        intent = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT);
++        intent.setData(Uri.parse("package:" + packageName));
++      } else {
++        intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
++        intent.setData(Uri.parse("package:" + packageName));
++      }
++
++      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++      context.startActivity(intent);
++      promise.resolve(true);
++    } catch (Exception e) {
++      promise.reject("FSI_SETTINGS_OPEN_FAILED", e);
++    }
++  }
++
+   public static void sendEventToJs(String eventName, @Nullable WritableMap params) {
+     reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(eventName, params);
+   }
 diff --git a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java b/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java
 index 3395f00..0fa4f02 100644
 --- a/node_modules/react-native-full-screen-notification-incoming-call/android/src/main/java/com/reactnativefullscreennotificationincomingcall/IncomingCallActivity.java
@@ -23,3 +108,81 @@ index 3395f00..0fa4f02 100644
  
        getSupportFragmentManager()
          .beginTransaction()
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/lib/commonjs/index.js b/node_modules/react-native-full-screen-notification-incoming-call/lib/commonjs/index.js
+index 22add38..0de771d 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/lib/commonjs/index.js
++++ b/node_modules/react-native-full-screen-notification-incoming-call/lib/commonjs/index.js
+@@ -81,6 +81,14 @@ class RNNotificationCall {
+     if (!isAndroid) return;
+     RNNotificationIncomingCall.backToApp();
+   };
++  canUseFullScreenIntent = async () => {
++    if (!isAndroid) return true;
++    return RNNotificationIncomingCall.canUseFullScreenIntent();
++  };
++  openFullScreenIntentSettings = async () => {
++    if (!isAndroid) return false;
++    return RNNotificationIncomingCall.openFullScreenIntentSettings();
++  };
+ 
+   /**
+    * Add an event listener for notification actions
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/lib/module/index.js b/node_modules/react-native-full-screen-notification-incoming-call/lib/module/index.js
+index 67b5d65..d47b307 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/lib/module/index.js
++++ b/node_modules/react-native-full-screen-notification-incoming-call/lib/module/index.js
+@@ -75,6 +75,14 @@ class RNNotificationCall {
+     if (!isAndroid) return;
+     RNNotificationIncomingCall.backToApp();
+   };
++  canUseFullScreenIntent = async () => {
++    if (!isAndroid) return true;
++    return RNNotificationIncomingCall.canUseFullScreenIntent();
++  };
++  openFullScreenIntentSettings = async () => {
++    if (!isAndroid) return false;
++    return RNNotificationIncomingCall.openFullScreenIntentSettings();
++  };
+ 
+   /**
+    * Add an event listener for notification actions
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/lib/typescript/src/index.d.ts b/node_modules/react-native-full-screen-notification-incoming-call/lib/typescript/src/index.d.ts
+index 60e08a5..f9461f8 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/lib/typescript/src/index.d.ts
++++ b/node_modules/react-native-full-screen-notification-incoming-call/lib/typescript/src/index.d.ts
+@@ -102,6 +102,14 @@ declare class RNNotificationCall {
+      * Bring the app to the foreground
+      */
+     backToApp: () => void;
++    /**
++     * Check whether Android allows this app to use full-screen intent notifications.
++     */
++    canUseFullScreenIntent: () => Promise<boolean>;
++    /**
++     * Open the Android settings screen for full-screen intent access.
++     */
++    openFullScreenIntentSettings: () => Promise<boolean>;
+     /**
+      * Add an event listener for notification actions
+      * @param type - The type of event ('answer' or 'endCall')
+diff --git a/node_modules/react-native-full-screen-notification-incoming-call/src/index.tsx b/node_modules/react-native-full-screen-notification-incoming-call/src/index.tsx
+index b8d2ed5..f007300 100644
+--- a/node_modules/react-native-full-screen-notification-incoming-call/src/index.tsx
++++ b/node_modules/react-native-full-screen-notification-incoming-call/src/index.tsx
+@@ -172,6 +172,16 @@ class RNNotificationCall {
+     RNNotificationIncomingCall.backToApp();
+   };
+ 
++  canUseFullScreenIntent = async (): Promise<boolean> => {
++    if (!isAndroid) return true;
++    return RNNotificationIncomingCall.canUseFullScreenIntent();
++  };
++
++  openFullScreenIntentSettings = async (): Promise<boolean> => {
++    if (!isAndroid) return false;
++    return RNNotificationIncomingCall.openFullScreenIntentSettings();
++  };
++
+   /**
+    * Add an event listener for notification actions
+    * @param type - The type of event ('answer' or 'endCall')

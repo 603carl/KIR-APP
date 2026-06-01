@@ -106,6 +106,8 @@ export default function DashboardScreen() {
   const cachedUser = useRef<any>(null);
   const isRequestingLocation = useRef(false);
   const sosRequestSequence = useRef(0);
+  const sosCreationInFlightRef = useRef(false);
+  const activeSosIdRef = useRef<string | null>(null);
 
   // ─── Bug #7 Fix: Pending message queue ────────────────────────────────
   // When SOS is triggered, activeSosId is immediately set to 'pending'
@@ -115,6 +117,10 @@ export default function DashboardScreen() {
   // store it here. The modal's useEffect watches sosId and auto-sends
   // this queued message the moment a real UUID arrives.
   const pendingMessageRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeSosIdRef.current = activeSosId;
+  }, [activeSosId]);
 
   const loadCachedData = async (userId: string) => {
     try {
@@ -213,6 +219,11 @@ export default function DashboardScreen() {
     const user = cachedUser.current || (await getSessionSafely()).data.session?.user;
     if (!user) return;
     if (!cachedUser.current) cachedUser.current = user;
+
+    if (sosCreationInFlightRef.current || activeSosIdRef.current === 'pending') {
+      console.log('[SOS] Active check skipped while emergency link is being created.');
+      return;
+    }
 
     // 1. Fetch MOST RECENT active SOS session
     const { data: sosData } = await supabase
@@ -396,6 +407,7 @@ export default function DashboardScreen() {
     // If still in 'pending' state, no DB entry exists to cancel yet
     if (currentId === 'pending') {
       sosRequestSequence.current += 1;
+      sosCreationInFlightRef.current = false;
       console.log('[SOS] Cancelled before DB link was established.');
       return;
     }
@@ -432,16 +444,15 @@ export default function DashboardScreen() {
     }
 
     if (sosActive) {
-      cancelSOS();
-      setIsSosThrottled(true);
-      if (sosThrottleRef.current) clearTimeout(sosThrottleRef.current);
-      sosThrottleRef.current = setTimeout(() => setIsSosThrottled(false), 10000);
+      setIsChatVisible(true);
       return;
     }
 
     // 1. FAST TRIGGER (UI FEEDBACK)
     setSosActive(true);
-    setActiveSosId('pending'); 
+    setActiveSosId('pending');
+    setIsChatVisible(true);
+    sosCreationInFlightRef.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     const requestSequence = ++sosRequestSequence.current;
     
@@ -481,6 +492,7 @@ export default function DashboardScreen() {
         const sosData = rawSosData as OpenSosResult;
 
         if (requestSequence !== sosRequestSequence.current) {
+          sosCreationInFlightRef.current = false;
           await supabase.from('sos_alerts').update({
             status: 'cancelled',
             resolved_at: new Date().toISOString(),
@@ -489,6 +501,10 @@ export default function DashboardScreen() {
         }
 
         setActiveSosId(sosData.id);
+        setSosActive(true);
+        setIsChatVisible(true);
+        sosCreationInFlightRef.current = false;
+        attachSosListeners(sosData.id);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         console.log(`[SOS] Transmitted with GPS coordinates in ${Date.now() - startTime}ms`);
 
@@ -527,16 +543,24 @@ export default function DashboardScreen() {
         })();
       } catch (error) {
         console.error('[SOS] Terminal Failure:', error);
-        setSosActive(false);
-        setActiveSosId(null);
+        if (requestSequence === sosRequestSequence.current) {
+          setSosActive(false);
+          setActiveSosId(null);
+          setIsChatVisible(false);
+          sosCreationInFlightRef.current = false;
+        }
         Alert.alert(
           'Unable to Send SOS With Location',
           'Your current position could not be captured. Enable location access and try again immediately, or call emergency services.'
         );
+      } finally {
+        if (requestSequence === sosRequestSequence.current) {
+          sosCreationInFlightRef.current = false;
+        }
       }
     })();
 
-  }, [sosActive, isSosThrottled, cancelSOS, resolveEmergencyLocation]);
+  }, [sosActive, isSosThrottled, resolveEmergencyLocation, attachSosListeners]);
 
   return (
     <View style={styles.container}>
