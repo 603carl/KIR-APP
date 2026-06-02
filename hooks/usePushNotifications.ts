@@ -189,12 +189,13 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
     const coldStartChecked = useRef(false);
     const lastSyncTime = useRef<number>(0);
 
-    async function registerForPushNotificationsAsync() {
+    async function registerForPushNotificationsAsync(): Promise<{ expoPushToken: string | null; fcmPushToken: string | null } | null> {
         if (isExpoGo) {
             return null;
         }
 
-        let token;
+        let expoPushToken: string | null = null;
+        let fcmPushToken: string | null = null;
 
         if (Platform.OS === 'android') {
             // Create versioned emergency broadcast channel
@@ -252,10 +253,18 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             }
 
             try {
-                token = (await Notifications.getExpoPushTokenAsync({
+                expoPushToken = (await Notifications.getExpoPushTokenAsync({
                     projectId: '2ba9174f-05c8-4a7c-a227-86485c2803cd',
                 })).data;
-                console.log('Push Token successfully acquired:', token);
+                console.log('Expo push token successfully acquired:', expoPushToken);
+
+                if (Platform.OS === 'android') {
+                    const devicePushToken = await Notifications.getDevicePushTokenAsync();
+                    if (devicePushToken?.type === 'android' && typeof devicePushToken.data === 'string') {
+                        fcmPushToken = devicePushToken.data;
+                        console.log('Native FCM token successfully acquired.');
+                    }
+                }
             } catch (tokenErr) {
                 console.error('Error fetching Expo Push Token:', tokenErr);
                 return null;
@@ -264,12 +273,14 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             console.warn('Push registration skipped: Not a physical device');
         }
 
-        return token;
+        return { expoPushToken, fcmPushToken };
     }
 
     useEffect(() => {
         const syncToken = async () => {
-            const token = await registerForPushNotificationsAsync();
+            const tokenResult = await registerForPushNotificationsAsync();
+            const expoPushToken = tokenResult?.expoPushToken || null;
+            const fcmPushToken = tokenResult?.fcmPushToken || null;
 
             // Get current location for targeted emergency broadcasts
             let location = null;
@@ -282,7 +293,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                 console.warn('Could not get location for notification sync:', e);
             }
 
-            if (token || location) {
+            if (expoPushToken || fcmPushToken || location) {
                 try {
                     const { data: { session }, error: sessionError } = await getSessionSafely();
                     if (sessionError) {
@@ -293,9 +304,16 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                         const { error: rpcError } = await supabase.rpc('sync_user_profile_data', {
                             p_lat: location?.coords.latitude || null,
                             p_lng: location?.coords.longitude || null,
-                            p_push_token: token || null
+                            p_push_token: expoPushToken || null
                         });
                         if (rpcError) console.warn('[Push] RPC Sync error:', rpcError.message);
+                        if (fcmPushToken) {
+                            const { error: fcmError } = await supabase
+                                .from('profiles')
+                                .update({ fcm_push_token: fcmPushToken } as any)
+                                .eq('id', session.user.id);
+                            if (fcmError) console.warn('[Push] Native FCM token sync error:', fcmError.message);
+                        }
                     }
                 } catch (err) {
                     console.log('[Push] Critical sync failure:', err);
