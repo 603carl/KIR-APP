@@ -1,5 +1,7 @@
 import { getSessionSafely, supabase } from '@/lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
@@ -10,6 +12,8 @@ import type { ForegroundOptionsModel } from 'react-native-full-screen-notificati
 // ─── Constants ───────────────────────────────────────────────────────
 const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_EMERGENCY_NOTIFICATION';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const DEVICE_INSTALLATION_ID_KEY = 'kir_device_installation_id_v1';
+export const BROADCAST_READINESS_CACHE_KEY = 'kir_broadcast_readiness_v1';
 
 // ─── Versioned Channel ID ────────────────────────────────────────────
 // Android caches notification channel settings at creation time.
@@ -182,20 +186,57 @@ export interface NotificationBroadcastData {
     type?: string;
 }
 
+export interface BroadcastReadiness {
+    installationId: string | null;
+    expoPushTokenSynced: boolean;
+    nativeFcmTokenSynced: boolean;
+    notificationPermission: string | null;
+    fullScreenIntentAllowed: boolean | null;
+    lastSyncedAt: string | null;
+}
+
+async function getOrCreateInstallationId(): Promise<string> {
+    const existing = await AsyncStorage.getItem(DEVICE_INSTALLATION_ID_KEY);
+    if (existing) return existing;
+
+    const generated = `kir-${Crypto.randomUUID()}`;
+    await AsyncStorage.setItem(DEVICE_INSTALLATION_ID_KEY, generated);
+    return generated;
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────
 export function usePushNotifications(onBroadcastReceived?: (data: NotificationBroadcastData) => void) {
     const notificationListener = useRef<any | null>(null);
     const responseListener = useRef<any | null>(null);
     const coldStartChecked = useRef(false);
     const lastSyncTime = useRef<number>(0);
+    const [broadcastReadiness, setBroadcastReadiness] = useState<BroadcastReadiness>({
+        installationId: null,
+        expoPushTokenSynced: false,
+        nativeFcmTokenSynced: false,
+        notificationPermission: null,
+        fullScreenIntentAllowed: null,
+        lastSyncedAt: null,
+    });
 
-    async function registerForPushNotificationsAsync(): Promise<{ expoPushToken: string | null; fcmPushToken: string | null } | null> {
+    async function registerForPushNotificationsAsync(): Promise<{
+        installationId: string;
+        expoPushToken: string | null;
+        fcmPushToken: string | null;
+        notificationPermission: string | null;
+        fullScreenIntentAllowed: boolean | null;
+    } | null> {
         if (isExpoGo) {
             return null;
         }
 
+        const installationId = await getOrCreateInstallationId();
         let expoPushToken: string | null = null;
         let fcmPushToken: string | null = null;
+        let notificationPermission: string | null = null;
+        let fullScreenIntentAllowed: boolean | null = Platform.OS === 'android'
+            ? await canUseAndroidFullScreenIntent()
+            : true;
 
         if (Platform.OS === 'android') {
             // Create versioned emergency broadcast channel
@@ -244,12 +285,31 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                 });
                 finalStatus = status;
             }
+            notificationPermission = finalStatus;
 
             if (finalStatus !== 'granted') {
                 console.warn('Push notification permission NOT granted. Current status:', finalStatus);
-                // On Android 13+, if permission is denied, the app cannot show notifications.
-                // We should log this clearly for debugging production issues.
-                return null;
+                return {
+                    installationId,
+                    expoPushToken,
+                    fcmPushToken,
+                    notificationPermission,
+                    fullScreenIntentAllowed,
+                };
+            }
+
+            if (Platform.OS === 'android') {
+                try {
+                    const devicePushToken = await Notifications.getDevicePushTokenAsync();
+                    if (devicePushToken?.type === 'android' && typeof devicePushToken.data === 'string') {
+                        fcmPushToken = devicePushToken.data;
+                        console.log('Native FCM token successfully acquired.');
+                    } else {
+                        console.warn('[Push] Native device token was not an Android token:', devicePushToken?.type);
+                    }
+                } catch (nativeTokenErr) {
+                    console.warn('[Push] Native FCM token unavailable. Check google-services.json and EAS/Firebase credentials:', nativeTokenErr);
+                }
             }
 
             try {
@@ -257,32 +317,84 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
                     projectId: '2ba9174f-05c8-4a7c-a227-86485c2803cd',
                 })).data;
                 console.log('Expo push token successfully acquired:', expoPushToken);
-
-                if (Platform.OS === 'android') {
-                    const devicePushToken = await Notifications.getDevicePushTokenAsync();
-                    if (devicePushToken?.type === 'android' && typeof devicePushToken.data === 'string') {
-                        fcmPushToken = devicePushToken.data;
-                        console.log('Native FCM token successfully acquired.');
-                    }
-                }
             } catch (tokenErr) {
                 console.error('Error fetching Expo Push Token:', tokenErr);
-                return null;
             }
         } else {
             console.warn('Push registration skipped: Not a physical device');
         }
 
-        return { expoPushToken, fcmPushToken };
+        return {
+            installationId,
+            expoPushToken,
+            fcmPushToken,
+            notificationPermission,
+            fullScreenIntentAllowed,
+        };
     }
 
     useEffect(() => {
         const syncToken = async () => {
             const tokenResult = await registerForPushNotificationsAsync();
-            const expoPushToken = tokenResult?.expoPushToken || null;
-            const fcmPushToken = tokenResult?.fcmPushToken || null;
+            if (!tokenResult) return;
 
-            // Get current location for targeted emergency broadcasts
+            const {
+                installationId,
+                expoPushToken,
+                fcmPushToken,
+                notificationPermission,
+                fullScreenIntentAllowed,
+            } = tokenResult;
+            const syncedAt = new Date().toISOString();
+            let session = null;
+
+            try {
+                const { data, error: sessionError } = await getSessionSafely();
+                if (sessionError) {
+                    console.warn('[Push] Session error during sync:', sessionError.message);
+                }
+                session = data.session;
+            } catch (err) {
+                console.warn('[Push] Session read failed during device sync:', err);
+            }
+
+            try {
+                const { error: deviceSyncError } = await supabase.rpc('register_device_push_token' as any, {
+                    p_installation_id: installationId,
+                    p_platform: Platform.OS,
+                    p_expo_push_token: expoPushToken,
+                    p_fcm_push_token: fcmPushToken,
+                    p_app_version: Constants.expoConfig?.version || null,
+                    p_build_number: Constants.expoConfig?.android?.versionCode
+                        ? String(Constants.expoConfig.android.versionCode)
+                        : null,
+                    p_notification_permission: notificationPermission,
+                    p_full_screen_intent_allowed: fullScreenIntentAllowed,
+                    p_battery_optimization_status: null,
+                    p_emergency_enabled: true,
+                });
+                if (deviceSyncError) {
+                    console.warn('[Push] Device broadcast registration sync error:', deviceSyncError.message);
+                } else {
+                    const readiness = {
+                        installationId,
+                        expoPushTokenSynced: Boolean(expoPushToken),
+                        nativeFcmTokenSynced: Boolean(fcmPushToken),
+                        notificationPermission,
+                        fullScreenIntentAllowed,
+                        lastSyncedAt: syncedAt,
+                    };
+                    setBroadcastReadiness(readiness);
+                    await AsyncStorage.setItem(BROADCAST_READINESS_CACHE_KEY, JSON.stringify(readiness));
+                    lastSyncTime.current = Date.now();
+                }
+            } catch (deviceSyncErr) {
+                console.warn('[Push] Device broadcast registration failed:', deviceSyncErr);
+            }
+
+            if (!session?.user) return;
+
+            // Get current location for authenticated profile targeting only.
             let location = null;
             try {
                 const { status } = await Location.requestForegroundPermissionsAsync();
@@ -295,25 +407,18 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
 
             if (expoPushToken || fcmPushToken || location) {
                 try {
-                    const { data: { session }, error: sessionError } = await getSessionSafely();
-                    if (sessionError) {
-                        console.warn('[Push] Session error during sync:', sessionError.message);
-                        return;
-                    }
-                    if (session?.user) {
-                        const { error: rpcError } = await supabase.rpc('sync_user_profile_data', {
-                            p_lat: location?.coords.latitude || null,
-                            p_lng: location?.coords.longitude || null,
-                            p_push_token: expoPushToken || null
-                        });
-                        if (rpcError) console.warn('[Push] RPC Sync error:', rpcError.message);
-                        if (fcmPushToken) {
-                            const { error: fcmError } = await supabase
-                                .from('profiles')
-                                .update({ fcm_push_token: fcmPushToken } as any)
-                                .eq('id', session.user.id);
-                            if (fcmError) console.warn('[Push] Native FCM token sync error:', fcmError.message);
-                        }
+                    const { error: rpcError } = await supabase.rpc('sync_user_profile_data', {
+                        p_lat: location?.coords.latitude || null,
+                        p_lng: location?.coords.longitude || null,
+                        p_push_token: expoPushToken || null
+                    });
+                    if (rpcError) console.warn('[Push] RPC Sync error:', rpcError.message);
+                    if (fcmPushToken) {
+                        const { error: fcmError } = await supabase
+                            .from('profiles')
+                            .update({ fcm_push_token: fcmPushToken } as any)
+                            .eq('id', session.user.id);
+                        if (fcmError) console.warn('[Push] Native FCM token sync error:', fcmError.message);
                     }
                 } catch (err) {
                     console.log('[Push] Critical sync failure:', err);
@@ -326,7 +431,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
 
         // Re-sync on auth state changes
         const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event) => {
-            if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+            if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'SIGNED_OUT') {
                 syncToken();
             }
         });
@@ -442,5 +547,5 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
         };
     }, [onBroadcastReceived]);
 
-    return { registerForPushNotificationsAsync };
+    return { registerForPushNotificationsAsync, broadcastReadiness };
 }

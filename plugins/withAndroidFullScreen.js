@@ -159,7 +159,7 @@ import androidx.core.app.NotificationCompat
 
 object EmergencyBroadcastNotifier {
   private const val TAG = "KIREmergencyBroadcast"
-  private const val CHANNEL_ID = "emergency-broadcasts-native-v1"
+  private const val CHANNEL_ID = "emergency-broadcasts-native-v2"
   private const val CHANNEL_NAME = "Emergency Broadcast Takeover"
 
   fun show(context: Context, rawData: Map<String, String>) {
@@ -170,6 +170,7 @@ object EmergencyBroadcastNotifier {
     val severity = data["severity"] ?: "extreme"
     val notificationId = broadcastId.hashCode() and Int.MAX_VALUE
 
+    Log.i(TAG, "Native broadcast message received: id=$broadcastId severity=$severity")
     createChannel(context)
 
     val fullScreenIntent = Intent(context, EmergencyBroadcastActivity::class.java).apply {
@@ -212,8 +213,11 @@ object EmergencyBroadcastNotifier {
     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !notificationManager.canUseFullScreenIntent()) {
       Log.w(TAG, "Full-screen intent access is disabled by Android. Posting alarm notification fallback.")
+    } else {
+      Log.i(TAG, "Full-screen intent access available. Posting takeover notification.")
     }
     notificationManager.notify(notificationId, notification)
+    Log.i(TAG, "Emergency broadcast notification posted: id=$broadcastId notificationId=$notificationId")
   }
 
   private fun sanitize(rawData: Map<String, String>): Map<String, String> {
@@ -227,6 +231,7 @@ object EmergencyBroadcastNotifier {
     val existing = notificationManager.getNotificationChannel(CHANNEL_ID)
     if (existing != null) return
 
+    Log.i(TAG, "Creating emergency broadcast notification channel: $CHANNEL_ID")
     val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH).apply {
       description = "Critical KIR broadcast alerts with alarm sound and full-screen presentation."
       lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -300,9 +305,20 @@ function writeKotlinFile(projectRoot, packageName, fileName, source) {
 }
 
 function addFirebaseMessagingDependency(buildGradle) {
-    const dependency = '    implementation("com.google.firebase:firebase-messaging:25.0.1")';
-    if (buildGradle.includes('com.google.firebase:firebase-messaging')) return buildGradle;
-    return buildGradle.replace(/dependencies\s*\{\s*/, (match) => `${match}\n${dependency}\n`);
+    let next = buildGradle;
+    if (!next.includes('com.google.firebase:firebase-bom')) {
+        next = next.replace(
+            /dependencies\s*\{\s*/,
+            (match) => `${match}\n    implementation(platform("com.google.firebase:firebase-bom:34.14.0"))\n`
+        );
+    }
+    if (!next.includes('com.google.firebase:firebase-messaging')) {
+        next = next.replace(
+            /dependencies\s*\{\s*/,
+            (match) => `${match}\n    implementation("com.google.firebase:firebase-messaging")\n`
+        );
+    }
+    return next.replace(/implementation\("com\.google\.firebase:firebase-messaging:[^"]+"\)/g, 'implementation("com.google.firebase:firebase-messaging")');
 }
 
 /**

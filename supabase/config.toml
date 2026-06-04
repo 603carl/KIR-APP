@@ -1,0 +1,4 @@
+project_id = "kbudyhgugehbdgoaofiv"
+
+[functions.broadcast-delivery]
+verify_jwt = false

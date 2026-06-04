@@ -1,6 +1,13 @@
 import { BORDER_RADIUS, COLORS, SHADOWS, SPACING } from '@/constants/Theme';
 import { supabase } from '@/lib/supabase';
 import { useProfile } from '@/context/ProfileContext';
+import {
+    BROADCAST_READINESS_CACHE_KEY,
+    canUseAndroidFullScreenIntent,
+    openAndroidFullScreenIntentSettings,
+    type BroadcastReadiness,
+} from '@/hooks/usePushNotifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
@@ -44,6 +51,7 @@ export default function SettingsScreen() {
     const [criticalAlerts, setCriticalAlerts] = useState(true);
     const [biometrics, setBiometrics] = useState(false);
     const [stats, setStats] = useState({ reports: 0, resolved: 0 });
+    const [broadcastReadiness, setBroadcastReadiness] = useState<BroadcastReadiness | null>(null);
 
     useEffect(() => {
         const fetchStats = async () => {
@@ -68,6 +76,31 @@ export default function SettingsScreen() {
         setCriticalAlerts(profile?.notification_prefs?.emergency !== false);
         setBiometrics(profile?.privacy_settings?.biometric_lock === true);
     }, [profile?.notification_prefs, profile?.privacy_settings]);
+
+    useEffect(() => {
+        const loadBroadcastReadiness = async () => {
+            try {
+                const cached = await AsyncStorage.getItem(BROADCAST_READINESS_CACHE_KEY);
+                const parsed = cached ? JSON.parse(cached) as BroadcastReadiness : null;
+                if (Platform.OS === 'android') {
+                    const fullScreenIntentAllowed = await canUseAndroidFullScreenIntent();
+                    setBroadcastReadiness(parsed ? { ...parsed, fullScreenIntentAllowed } : {
+                        installationId: null,
+                        expoPushTokenSynced: false,
+                        nativeFcmTokenSynced: false,
+                        notificationPermission: null,
+                        fullScreenIntentAllowed,
+                        lastSyncedAt: null,
+                    });
+                    return;
+                }
+                setBroadcastReadiness(parsed);
+            } catch {
+                setBroadcastReadiness(null);
+            }
+        };
+        loadBroadcastReadiness();
+    }, []);
 
     const updatePreference = async (
         field: 'notification_prefs' | 'privacy_settings',
@@ -122,6 +155,17 @@ export default function SettingsScreen() {
                 }
             ]
         );
+    };
+
+    const openBroadcastPermissionSettings = async () => {
+        if (Platform.OS !== 'android') {
+            Alert.alert('Broadcast Readiness', 'Critical broadcast readiness is managed by iOS notification settings.');
+            return;
+        }
+        const opened = await openAndroidFullScreenIntentSettings();
+        if (!opened) {
+            Alert.alert('Broadcast Readiness', 'Open Android app settings and enable notifications and full-screen notifications for KIR.');
+        }
     };
 
     const SettingRow = ({ icon: Icon, title, value, onValueChange, type = 'switch', onPress, subValue }: any) => (
@@ -291,6 +335,18 @@ export default function SettingsScreen() {
                                 setCriticalAlerts(enabled);
                                 await updatePreference('notification_prefs', 'emergency', enabled);
                             }}
+                        />
+                        <View style={styles.divider} />
+                        <SettingRow
+                            icon={ShieldCheck}
+                            title="Broadcast Takeover Readiness"
+                            type="link"
+                            onPress={openBroadcastPermissionSettings}
+                            subValue={[
+                                broadcastReadiness?.nativeFcmTokenSynced ? 'Native FCM armed' : 'Native FCM not synced yet',
+                                broadcastReadiness?.notificationPermission === 'granted' ? 'notifications granted' : 'notifications not granted',
+                                broadcastReadiness?.fullScreenIntentAllowed ? 'full-screen allowed' : 'full-screen needs setup',
+                            ].join(' | ')}
                         />
                     </View>
 

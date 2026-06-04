@@ -10,6 +10,7 @@ const EXPO_CHUNK_SIZE = 100;
 const FCM_CHUNK_SIZE = 50;
 const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v3';
 const LEGACY_TRIGGER_SECRET = 'kir_internal_pulse_2026';
+const FUNCTION_VERSION = '14-device-registry';
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const corsHeaders = {
@@ -225,11 +226,23 @@ Deno.serve(async (req: Request) => {
         let totalSent = 0;
         let totalTokens = 0;
         let totalFailed = 0;
+        let totalDevices = 0;
+        let totalNativeAttempted = 0;
         let totalNativeSent = 0;
+        let totalNativeFailed = 0;
+        let totalExpoAttempted = 0;
         let totalExpoSent = 0;
+        let totalExpoFailed = 0;
+        let totalInvalidTokensRemoved = 0;
 
         while (true) {
-            let recipients: Array<{ id: string; push_token: string | null; fcm_push_token?: string | null }> = [];
+            let recipients: Array<{
+                id?: string;
+                installation_id?: string;
+                push_token?: string | null;
+                expo_push_token?: string | null;
+                fcm_push_token?: string | null;
+            }> = [];
             let pageLength = 0;
 
             if (isSos) {
@@ -257,31 +270,35 @@ Deno.serve(async (req: Request) => {
                 recipients = staffProfiles || [];
             } else {
                 let citizenQuery = adminClient
-                    .from('profiles')
-                    .select('id, push_token, fcm_push_token, notification_prefs')
-                    .or('push_token.not.is.null,fcm_push_token.not.is.null')
-                    .order('id', { ascending: true })
+                    .from('device_push_registrations')
+                    .select('installation_id, expo_push_token, fcm_push_token, notification_permission, full_screen_intent_allowed')
+                    .eq('opted_out_emergency', false)
+                    .gt('last_seen_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+                    .or('expo_push_token.not.is.null,fcm_push_token.not.is.null')
+                    .order('installation_id', { ascending: true })
                     .limit(TOKEN_BATCH_SIZE);
-                if (lastId) citizenQuery = citizenQuery.gt('id', lastId);
+                if (lastId) citizenQuery = citizenQuery.gt('installation_id', lastId);
 
-                const { data: citizens, error: citizenError } = await citizenQuery;
-                if (citizenError) throw citizenError;
-                if (!citizens || citizens.length === 0) break;
+                const { data: devices, error: deviceError } = await citizenQuery;
+                if (deviceError) throw deviceError;
+                if (!devices || devices.length === 0) break;
 
-                lastId = citizens[citizens.length - 1].id;
-                pageLength = citizens.length;
-                recipients = citizens.filter((citizen: any) => citizen.notification_prefs?.emergency !== false);
+                lastId = devices[devices.length - 1].installation_id;
+                pageLength = devices.length;
+                recipients = devices || [];
             }
 
+            totalDevices += recipients.length;
             const nativeRecipients = fcmCredentials
                 ? recipients.filter((recipient: any) => recipient.fcm_push_token)
                 : [];
             const nativeTokens = nativeRecipients.map((recipient: any) => recipient.fcm_push_token).filter(Boolean);
             let expoTokens = recipients
                 .filter((recipient: any) => !fcmCredentials || !recipient.fcm_push_token)
-                .map((recipient: any) => recipient.push_token)
+                .map((recipient: any) => isSos ? recipient.push_token : recipient.expo_push_token)
                 .filter(Boolean);
             totalTokens += nativeTokens.length + expoTokens.length;
+            totalNativeAttempted += nativeTokens.length;
             const addExpoFallbackTokens = (tokens: string[]) => {
                 const tokenSet = new Set(expoTokens);
                 for (const token of tokens) {
@@ -307,30 +324,36 @@ Deno.serve(async (req: Request) => {
                     totalNativeSent += nativeResult.sent;
                     totalSent += nativeResult.sent;
                     totalFailed += nativeResult.failed;
+                    totalNativeFailed += nativeResult.failed;
 
                     if (nativeResult.failedTokens.length > 0) {
                         const fallbackTokens = nativeRecipients
                             .filter((recipient: any) => nativeResult.failedTokens.includes(recipient.fcm_push_token))
-                            .map((recipient: any) => recipient.push_token)
+                            .map((recipient: any) => isSos ? recipient.push_token : recipient.expo_push_token)
                             .filter(Boolean);
                         addExpoFallbackTokens(fallbackTokens);
                     }
 
                     if (nativeResult.invalidTokens.length > 0) {
                         await adminClient
-                            .from('profiles')
+                            .from(isSos ? 'profiles' : 'device_push_registrations')
                             .update({ fcm_push_token: null })
                             .in('fcm_push_token', nativeResult.invalidTokens);
+                        totalInvalidTokensRemoved += nativeResult.invalidTokens.length;
                     }
                 } catch (nativeError: any) {
                     console.error('Native FCM delivery failed; falling back to Expo push:', nativeError?.message || nativeError);
                     totalFailed += nativeTokens.length;
-                    addExpoFallbackTokens(nativeRecipients.map((recipient: any) => recipient.push_token).filter(Boolean));
+                    totalNativeFailed += nativeTokens.length;
+                    addExpoFallbackTokens(nativeRecipients
+                        .map((recipient: any) => isSos ? recipient.push_token : recipient.expo_push_token)
+                        .filter(Boolean));
                 }
             }
 
             for (let index = 0; index < expoTokens.length; index += EXPO_CHUNK_SIZE) {
                 const chunkTokens = expoTokens.slice(index, index + EXPO_CHUNK_SIZE);
+                totalExpoAttempted += chunkTokens.length;
                 const chunk = chunkTokens.map((token: string) => ({
                     to: token,
                     title,
@@ -376,17 +399,42 @@ Deno.serve(async (req: Request) => {
 
                 if (invalidTokens.length > 0) {
                     await adminClient
-                        .from('profiles')
-                        .update({ push_token: null })
-                        .in('push_token', invalidTokens);
+                        .from(isSos ? 'profiles' : 'device_push_registrations')
+                        .update(isSos ? { push_token: null } : { expo_push_token: null })
+                        .in(isSos ? 'push_token' : 'expo_push_token', invalidTokens);
+                    totalInvalidTokensRemoved += invalidTokens.length;
                 }
 
                 totalFailed += failedInChunk;
+                totalExpoFailed += failedInChunk;
                 totalSent += chunk.length - failedInChunk;
                 totalExpoSent += chunk.length - failedInChunk;
             }
 
             if (pageLength < TOKEN_BATCH_SIZE) break;
+        }
+
+        if (!isSos) {
+            await adminClient
+                .from('broadcast_delivery_attempts')
+                .insert({
+                    broadcast_id: record.id,
+                    target: 'citizens',
+                    native_fcm_configured: Boolean(fcmCredentials),
+                    total_devices: totalDevices,
+                    total_tokens: totalTokens,
+                    native_attempted: totalNativeAttempted,
+                    native_sent: totalNativeSent,
+                    native_failed: totalNativeFailed,
+                    expo_attempted: totalExpoAttempted,
+                    expo_sent: totalExpoSent,
+                    expo_failed: totalExpoFailed,
+                    invalid_tokens_removed: totalInvalidTokensRemoved,
+                    function_version: FUNCTION_VERSION,
+                    error_summary: !fcmCredentials
+                        ? 'Native FCM service account secret is not configured; Expo fallback only.'
+                        : null,
+                });
         }
 
         return json({

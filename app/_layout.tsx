@@ -251,13 +251,15 @@ export default function RootLayout() {
                     setPendingRedirect('/(tabs)');
                 }
 
-                // 5. Biometric Lock & Android 14+ Ready Check
+                // 5. Biometric Lock
                 if (session?.user) {
                     await loadUserControls(session.user.id, true);
-                    // Android 14+: Check FSI permission and prompt if needed
-                    if (!isExpoGo && Platform.OS === 'android' && Platform.Version >= 34) {
-                        void promptForFSIPermission();
-                    }
+                }
+
+                // Android 14+: full-screen broadcast access is a device emergency
+                // readiness setting and must not depend on citizen sign-in state.
+                if (!isExpoGo && Platform.OS === 'android' && Platform.Version >= 34) {
+                    void promptForFSIPermission();
                 }
 
             } catch (e) {
