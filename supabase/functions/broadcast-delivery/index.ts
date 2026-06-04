@@ -8,9 +8,11 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const TOKEN_BATCH_SIZE = 1000;
 const EXPO_CHUNK_SIZE = 100;
 const FCM_CHUNK_SIZE = 50;
-const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v3';
+const BROADCAST_DEVICE_STALE_DAYS = 365;
+const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v4';
+const VISIBLE_FALLBACK_CHANNEL_ID = 'emergency-broadcasts-v3';
 const LEGACY_TRIGGER_SECRET = 'kir_internal_pulse_2026';
-const FUNCTION_VERSION = '14-device-registry';
+const FUNCTION_VERSION = '15-native-fcm-visible-fallback';
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const corsHeaders = {
@@ -147,11 +149,54 @@ const sendNativeFcmBroadcasts = async (
                         android: {
                             priority: 'HIGH',
                             ttl: `${ttlSeconds}s`,
+                            collapse_key: data.broadcastId || undefined,
+                            direct_boot_ok: true,
                         },
                     },
                 }),
             });
-            if (response.ok) return { ok: true, token };
+            if (response.ok) {
+                const fallbackResponse = await fetch(`https://fcm.googleapis.com/v1/projects/${credentials.project_id}/messages:send`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: {
+                            token,
+                            notification: {
+                                title: data.title || 'Emergency Broadcast',
+                                body: data.message || 'An official emergency alert has been issued.',
+                            },
+                            data: {
+                                ...data,
+                                kir_visible_fallback: 'true',
+                            },
+                            android: {
+                                priority: 'HIGH',
+                                ttl: `${ttlSeconds}s`,
+                                collapse_key: `${data.broadcastId || 'broadcast'}-visible`,
+                                direct_boot_ok: true,
+                                notification: {
+                                    channel_id: VISIBLE_FALLBACK_CHANNEL_ID,
+                                    notification_priority: 'PRIORITY_MAX',
+                                    visibility: 'PUBLIC',
+                                    sound: 'emergency_alert',
+                                    tag: data.broadcastId || undefined,
+                                    color: '#FF0000',
+                                    sticky: true,
+                                    default_vibrate_timings: false,
+                                },
+                            },
+                        },
+                    }),
+                });
+                if (!fallbackResponse.ok) {
+                    console.warn('FCM visible fallback failed:', await fallbackResponse.text());
+                }
+                return { ok: true, token };
+            }
             const body = await response.text();
             return { ok: false, token, invalid: isInvalidFcmTokenError(response.status, body), body };
         }));
@@ -273,7 +318,7 @@ Deno.serve(async (req: Request) => {
                     .from('device_push_registrations')
                     .select('installation_id, expo_push_token, fcm_push_token, notification_permission, full_screen_intent_allowed')
                     .eq('opted_out_emergency', false)
-                    .gt('last_seen_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+                    .gt('last_seen_at', new Date(Date.now() - BROADCAST_DEVICE_STALE_DAYS * 24 * 60 * 60 * 1000).toISOString())
                     .or('expo_push_token.not.is.null,fcm_push_token.not.is.null')
                     .order('installation_id', { ascending: true })
                     .limit(TOKEN_BATCH_SIZE);

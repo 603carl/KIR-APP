@@ -6,20 +6,21 @@ import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { useEffect, useRef, useState } from 'react';
-import { Platform, AppState } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import type { ForegroundOptionsModel } from 'react-native-full-screen-notification-incoming-call';
 
 // ─── Constants ───────────────────────────────────────────────────────
 const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_EMERGENCY_NOTIFICATION';
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const DEVICE_INSTALLATION_ID_KEY = 'kir_device_installation_id_v1';
+const NOTIFICATION_PERMISSION_INTRO_KEY = 'kir_notification_permission_intro_prompted_at';
 export const BROADCAST_READINESS_CACHE_KEY = 'kir_broadcast_readiness_v1';
 
 // ─── Versioned Channel ID ────────────────────────────────────────────
 // Android caches notification channel settings at creation time.
 // If you change sound/importance/vibration, you MUST bump the version
 // so Android creates a fresh channel with the new settings.
-const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v3';
+const EMERGENCY_CHANNEL_ID = 'emergency-broadcasts-v4';
 
 let Notifications: any = null;
 let RNIncomingCall: any = null;
@@ -204,6 +205,27 @@ async function getOrCreateInstallationId(): Promise<string> {
     return generated;
 }
 
+async function showNotificationPermissionIntro(): Promise<void> {
+    const lastPrompt = await AsyncStorage.getItem(NOTIFICATION_PERMISSION_INTRO_KEY);
+    const lastPromptTime = lastPrompt ? Number(lastPrompt) : 0;
+    const promptCooldownMs = 7 * 24 * 60 * 60 * 1000;
+    if (lastPromptTime && Date.now() - lastPromptTime < promptCooldownMs) return;
+
+    await new Promise<void>((resolve) => {
+        Alert.alert(
+            'Enable Emergency Alerts',
+            'Receive critical emergency alerts anytime.',
+            [
+                {
+                    text: 'Continue',
+                    onPress: () => resolve(),
+                },
+            ],
+        );
+    });
+    await AsyncStorage.setItem(NOTIFICATION_PERMISSION_INTRO_KEY, String(Date.now()));
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────
 export function usePushNotifications(onBroadcastReceived?: (data: NotificationBroadcastData) => void) {
     const notificationListener = useRef<any | null>(null);
@@ -266,6 +288,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             try {
                 await Notifications.deleteNotificationChannelAsync('emergency-broadcasts');
                 await Notifications.deleteNotificationChannelAsync('emergency-broadcasts-v2');
+                await Notifications.deleteNotificationChannelAsync('emergency-broadcasts-native-v2');
             } catch (_) { /* old channel may not exist */ }
         }
 
@@ -274,6 +297,7 @@ export function usePushNotifications(onBroadcastReceived?: (data: NotificationBr
             let finalStatus = existingStatus;
             
             if (existingStatus !== 'granted' && canAskAgain) {
+                await showNotificationPermissionIntro();
                 const { status } = await Notifications.requestPermissionsAsync({
                     ios: {
                         allowAlert: true,

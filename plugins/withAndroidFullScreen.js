@@ -9,6 +9,8 @@ const activitySource = (packageName) => `package ${packageName}
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -24,83 +26,130 @@ class EmergencyBroadcastActivity : Activity() {
     super.onCreate(savedInstanceState)
     enableLockScreenPresentation()
 
-    val title = intent.getStringExtra("title") ?: "Emergency Broadcast"
+    val title = intent.getStringExtra("title") ?: "Emergency Alert"
     val message = intent.getStringExtra("message") ?: "An official emergency alert has been issued."
     val severity = intent.getStringExtra("severity") ?: "extreme"
+    val colors = severityColors(severity)
 
     val root = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER
-      setPadding(40, 56, 40, 56)
-      setBackgroundColor(Color.rgb(127, 29, 29))
+      setPadding(dp(24), dp(48), dp(24), dp(48))
+      background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, colors)
       layoutParams = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT
       )
     }
 
-    val badge = TextView(this).apply {
-      text = "KENYA INCIDENT REPORT"
-      setTextColor(Color.rgb(254, 226, 226))
-      textSize = 13f
-      letterSpacing = 0.18f
+    val icon = TextView(this).apply {
+      text = "!"
+      setTextColor(Color.WHITE)
+      textSize = 42f
       gravity = Gravity.CENTER
-      setPadding(0, 0, 0, 20)
+      setTypeface(typeface, Typeface.BOLD)
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(Color.TRANSPARENT)
+        setStroke(dp(3), Color.WHITE)
+      }
+    }
+
+    val emergencyTitle = TextView(this).apply {
+      text = when (severity.lowercase()) {
+        "extreme" -> "EXTREME EMERGENCY"
+        "severe" -> "SEVERE ALERT"
+        "amber" -> "AMBER ALERT"
+        else -> "EMERGENCY ALERT"
+      }
+      setTextColor(Color.WHITE)
+      textSize = 32f
+      gravity = Gravity.CENTER
+      letterSpacing = 0.06f
+      setTypeface(typeface, Typeface.BOLD)
+      setPadding(0, dp(14), 0, dp(28))
+    }
+
+    val body = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER
+      setPadding(dp(20), dp(22), dp(20), dp(22))
+      background = GradientDrawable().apply {
+        cornerRadius = dp(20).toFloat()
+        setColor(Color.argb(88, 0, 0, 0))
+        setStroke(dp(1), Color.argb(64, 255, 255, 255))
+      }
     }
 
     val titleView = TextView(this).apply {
       text = title
       setTextColor(Color.WHITE)
-      textSize = 32f
+      textSize = 24f
       gravity = Gravity.CENTER
-      setTypeface(typeface, android.graphics.Typeface.BOLD)
-      setPadding(0, 0, 0, 18)
-    }
-
-    val severityView = TextView(this).apply {
-      text = "SEVERITY: \${severity.uppercase()}"
-      setTextColor(Color.rgb(254, 202, 202))
-      textSize = 15f
-      gravity = Gravity.CENTER
-      setTypeface(typeface, android.graphics.Typeface.BOLD)
-      setPadding(0, 0, 0, 28)
+      setTypeface(typeface, Typeface.BOLD)
+      setPadding(0, 0, 0, dp(14))
     }
 
     val messageView = TextView(this).apply {
       text = message
       setTextColor(Color.WHITE)
-      textSize = 20f
+      textSize = 18f
       gravity = Gravity.CENTER
-      setLineSpacing(8f, 1.0f)
-      setPadding(8, 0, 8, 36)
+      setLineSpacing(dp(4).toFloat(), 1.0f)
     }
 
     val openButton = Button(this).apply {
       text = "OPEN KIR APP"
-      setTextColor(Color.rgb(127, 29, 29))
-      setTypeface(typeface, android.graphics.Typeface.BOLD)
+      textSize = 18f
+      setTextColor(colors[0])
+      setTypeface(typeface, Typeface.BOLD)
+      background = GradientDrawable().apply {
+        cornerRadius = dp(999).toFloat()
+        setColor(Color.WHITE)
+      }
+      setPadding(0, dp(14), 0, dp(14))
       setOnClickListener {
         openMainApp()
       }
     }
 
+    val disclaimer = TextView(this).apply {
+      text = "Alert active until dismissed. Move to safety immediately."
+      setTextColor(Color.argb(178, 255, 255, 255))
+      textSize = 12f
+      gravity = Gravity.CENTER
+      setPadding(0, dp(14), 0, dp(10))
+    }
+
     val dismissButton = Button(this).apply {
       text = "DISMISS"
+      textSize = 16f
       setTextColor(Color.WHITE)
       setBackgroundColor(Color.TRANSPARENT)
+      setTypeface(typeface, Typeface.BOLD)
       setOnClickListener {
         finishAndRemoveTask()
       }
     }
 
-    root.addView(badge)
-    root.addView(titleView)
-    root.addView(severityView)
-    root.addView(messageView)
+    body.addView(titleView)
+    body.addView(messageView)
+
+    root.addView(icon, LinearLayout.LayoutParams(dp(96), dp(96)))
+    root.addView(emergencyTitle)
+    root.addView(body, LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT
+    ).apply {
+      bottomMargin = dp(28)
+    })
     root.addView(openButton, LinearLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.WRAP_CONTENT
+    ).apply {
+      bottomMargin = dp(4)
     ))
+    root.addView(disclaimer)
     root.addView(dismissButton, LinearLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.WRAP_CONTENT
@@ -140,6 +189,19 @@ class EmergencyBroadcastActivity : Activity() {
     }
     finishAndRemoveTask()
   }
+
+  private fun severityColors(severity: String): IntArray {
+    return when (severity.lowercase()) {
+      "extreme" -> intArrayOf(Color.rgb(153, 0, 0), Color.rgb(255, 0, 0))
+      "severe" -> intArrayOf(Color.rgb(192, 86, 0), Color.rgb(255, 140, 0))
+      "amber" -> intArrayOf(Color.rgb(184, 134, 11), Color.rgb(255, 191, 0))
+      else -> intArrayOf(Color.rgb(68, 68, 68), Color.rgb(102, 102, 102))
+    }
+  }
+
+  private fun dp(value: Int): Int {
+    return (value * resources.displayMetrics.density).toInt()
+  }
 }
 `;
 
@@ -156,10 +218,11 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 
 object EmergencyBroadcastNotifier {
   private const val TAG = "KIREmergencyBroadcast"
-  private const val CHANNEL_ID = "emergency-broadcasts-native-v2"
+  private const val CHANNEL_ID = "emergency-broadcasts-v4"
   private const val CHANNEL_NAME = "Emergency Broadcast Takeover"
 
   fun show(context: Context, rawData: Map<String, String>) {
@@ -211,13 +274,23 @@ object EmergencyBroadcastNotifier {
       }
 
     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    val notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    if (!notificationsEnabled) {
+      Log.e(TAG, "Android notifications are disabled for this app. Emergency broadcast notification cannot be displayed.")
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !notificationManager.canUseFullScreenIntent()) {
       Log.w(TAG, "Full-screen intent access is disabled by Android. Posting alarm notification fallback.")
     } else {
       Log.i(TAG, "Full-screen intent access available. Posting takeover notification.")
     }
-    notificationManager.notify(notificationId, notification)
-    Log.i(TAG, "Emergency broadcast notification posted: id=$broadcastId notificationId=$notificationId")
+    try {
+      notificationManager.notify(notificationId, notification)
+      Log.i(TAG, "Emergency broadcast notification posted: id=$broadcastId notificationId=$notificationId notificationsEnabled=$notificationsEnabled")
+    } catch (securityError: SecurityException) {
+      Log.e(TAG, "Emergency broadcast notification blocked by Android notification permission.", securityError)
+    } catch (error: Throwable) {
+      Log.e(TAG, "Emergency broadcast notification failed.", error)
+    }
   }
 
   private fun sanitize(rawData: Map<String, String>): Map<String, String> {
@@ -237,6 +310,7 @@ object EmergencyBroadcastNotifier {
       lockscreenVisibility = Notification.VISIBILITY_PUBLIC
       enableVibration(true)
       vibrationPattern = longArrayOf(0, 1000, 500, 1000, 500, 1000)
+      setBypassDnd(true)
       setSound(
         soundUri(context),
         AudioAttributes.Builder()
@@ -259,12 +333,14 @@ const messagingServiceSource = (packageName) => `package ${packageName}
 
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
+import android.util.Log
 
 class EmergencyBroadcastMessagingService : ExpoFirebaseMessagingService() {
   override fun onMessageReceived(remoteMessage: RemoteMessage) {
     val data = remoteMessage.data.toMutableMap()
     remoteMessage.notification?.title?.let { data.putIfAbsent("title", it) }
     remoteMessage.notification?.body?.let { data.putIfAbsent("message", it) }
+    Log.i("KIREmergencyBroadcast", "Firebase message received: dataKeys=\${data.keys.joinToString(",")} hasNotification=\${remoteMessage.notification != null} priority=\${remoteMessage.priority}")
 
     if (isKirBroadcast(data)) {
       EmergencyBroadcastNotifier.show(applicationContext, data)
@@ -302,6 +378,24 @@ function writeKotlinFile(projectRoot, packageName, fileName, source) {
     const dir = path.join(projectRoot, 'app', 'src', 'main', 'java', ...packagePath.split(path.sep));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, fileName), source, 'utf8');
+}
+
+function ensureDefaultFcmChannel(projectRoot) {
+    const manifestPath = path.join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml');
+    if (!fs.existsSync(manifestPath)) return;
+
+    const channelMetaData =
+        '    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="emergency-broadcasts-v4" tools:replace="android:value"/>';
+    let manifest = fs.readFileSync(manifestPath, 'utf8');
+    if (manifest.includes('com.google.firebase.messaging.default_notification_channel_id')) return;
+
+    const insertionPoint = manifest.indexOf('    <meta-data android:name="com.google.firebase.messaging.default_notification_color"');
+    if (insertionPoint >= 0) {
+        manifest = `${manifest.slice(0, insertionPoint)}${channelMetaData}\n${manifest.slice(insertionPoint)}`;
+    } else {
+        manifest = manifest.replace(/(<application\b[^>]*>\s*)/, `$1\n${channelMetaData}\n`);
+    }
+    fs.writeFileSync(manifestPath, manifest, 'utf8');
 }
 
 function addFirebaseMessagingDependency(buildGradle) {
@@ -381,6 +475,14 @@ function withAndroidFullScreen(config) {
         }
 
         const application = manifest.application[0];
+        const metaData = ensureArray(application, 'meta-data');
+        application['meta-data'] = upsertByAndroidName(metaData, {
+            '$': {
+                'android:name': 'com.google.firebase.messaging.default_notification_channel_id',
+                'android:value': 'emergency-broadcasts-v4',
+                'tools:replace': 'android:value',
+            },
+        });
         const services = ensureArray(application, 'service');
         application.service = upsertByAndroidName(services, {
             '$': {
@@ -425,6 +527,7 @@ function withAndroidFullScreen(config) {
             writeKotlinFile(projectRoot, packageName, 'EmergencyBroadcastActivity.kt', activitySource(packageName));
             writeKotlinFile(projectRoot, packageName, 'EmergencyBroadcastNotifier.kt', notifierSource(packageName));
             writeKotlinFile(projectRoot, packageName, 'EmergencyBroadcastMessagingService.kt', messagingServiceSource(packageName));
+            ensureDefaultFcmChannel(projectRoot);
             return config;
         },
     ]);

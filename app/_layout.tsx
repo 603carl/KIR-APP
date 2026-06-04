@@ -20,6 +20,7 @@ import { getSessionSafely, supabase } from '@/lib/supabase';
 import { ProfileProvider } from '@/context/ProfileContext';
 import { useAssets } from 'expo-asset';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import * as Device from 'expo-device';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useRootNavigationState, useRouter, useSegments } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
@@ -171,7 +172,15 @@ export default function RootLayout() {
     }, []);
 
     // Single hook call — the ONLY place usePushNotifications is called
-    usePushNotifications(handleBroadcastReceived);
+    const { broadcastReadiness } = usePushNotifications(handleBroadcastReceived);
+
+    useEffect(() => {
+        if (isExpoGo || Platform.OS !== 'android') return;
+        if (!initialRouteDetermined) return;
+        if (broadcastReadiness.notificationPermission && broadcastReadiness.notificationPermission !== 'granted') {
+            void promptForNotificationPermission();
+        }
+    }, [broadcastReadiness.notificationPermission, initialRouteDetermined]);
 
     // ─── Keep Screen Awake During Emergency ──────────────────────────
     useEffect(() => {
@@ -260,6 +269,9 @@ export default function RootLayout() {
                 // readiness setting and must not depend on citizen sign-in state.
                 if (!isExpoGo && Platform.OS === 'android' && Platform.Version >= 34) {
                     void promptForFSIPermission();
+                }
+                if (!isExpoGo && Platform.OS === 'android') {
+                    void promptForAndroidLockScreenPermission();
                 }
 
             } catch (e) {
@@ -483,7 +495,7 @@ async function promptForFSIPermission() {
 
     Alert.alert(
         'Emergency Alert Permission',
-        'Android requires full-screen notification access before this app can show broadcast alerts over the lock screen like a phone call. Enable "Full screen notifications" for the strongest emergency visibility. Alarm sound notifications will still be used if this access is unavailable.',
+        'Allow full-screen emergency alert display.',
         [
             {
                 text: 'Later',
@@ -508,4 +520,109 @@ async function promptForFSIPermission() {
             },
         ]
     );
+}
+
+async function promptForNotificationPermission() {
+    const lastPrompt = await SecureStore.getItemAsync('notification_permission_prompted_at');
+    const lastPromptTime = lastPrompt ? Number(lastPrompt) : 0;
+    const promptCooldownMs = 6 * 60 * 60 * 1000;
+    if (lastPromptTime && Date.now() - lastPromptTime < promptCooldownMs) return;
+
+    Alert.alert(
+        'Emergency Broadcasts Are Blocked',
+        'Critical alerts need notification access.',
+        [
+            {
+                text: 'Later',
+                style: 'cancel',
+                onPress: () => SecureStore.setItemAsync('notification_permission_prompted_at', String(Date.now())),
+            },
+            {
+                text: 'Enable Now',
+                onPress: async () => {
+                    await SecureStore.setItemAsync('notification_permission_prompted_at', String(Date.now()));
+                    try {
+                        if (Notifications?.requestPermissionsAsync) {
+                            const result = await Notifications.requestPermissionsAsync();
+                            if (result?.status === 'granted') return;
+                        }
+                    } catch {
+                        // Fall through to settings.
+                    }
+                    await Linking.openSettings();
+                },
+            },
+        ],
+    );
+}
+
+async function promptForAndroidLockScreenPermission() {
+    const manufacturer = (Device.manufacturer || '').toLowerCase();
+    const needsOemPrompt =
+        manufacturer.includes('xiaomi') ||
+        manufacturer.includes('redmi') ||
+        manufacturer.includes('poco');
+    if (!needsOemPrompt) return;
+
+    const lastPrompt = await SecureStore.getItemAsync('lockscreen_permission_prompted_at');
+    const lastPromptTime = lastPrompt ? Number(lastPrompt) : 0;
+    const promptCooldownMs = 7 * 24 * 60 * 60 * 1000;
+    if (lastPromptTime && Date.now() - lastPromptTime < promptCooldownMs) return;
+
+    Alert.alert(
+        'Lock Screen Alerts',
+        'Allow lock-screen emergency alert display.',
+        [
+            {
+                text: 'Later',
+                style: 'cancel',
+                onPress: () => SecureStore.setItemAsync('lockscreen_permission_prompted_at', String(Date.now())),
+            },
+            {
+                text: 'Open Settings',
+                onPress: async () => {
+                    await SecureStore.setItemAsync('lockscreen_permission_prompted_at', String(Date.now()));
+                    await openAndroidAppPermissionSettings();
+                },
+            },
+        ],
+    );
+}
+
+async function openAndroidAppPermissionSettings() {
+    const appPackage = Constants.expoConfig?.android?.package || 'com.publickenyaapp.kenyaincidentreport';
+
+    try {
+        await IntentLauncher.startActivityAsync('miui.intent.action.APP_PERM_EDITOR', {
+            packageName: 'com.miui.securitycenter',
+            className: 'com.miui.permcenter.permissions.PermissionsEditorActivity',
+            extra: {
+                extra_pkgname: appPackage,
+            },
+        });
+        return;
+    } catch {
+        // MIUI changes these internal activity names between releases.
+    }
+
+    try {
+        await IntentLauncher.startActivityAsync('miui.intent.action.APP_PERM_EDITOR', {
+            packageName: 'com.miui.securitycenter',
+            className: 'com.miui.permcenter.permissions.AppPermissionsEditorActivity',
+            extra: {
+                extra_pkgname: appPackage,
+            },
+        });
+        return;
+    } catch {
+        // Fall through to standard Android app details.
+    }
+
+    try {
+        await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.APPLICATION_DETAILS_SETTINGS, {
+            data: `package:${appPackage}`,
+        });
+    } catch {
+        await Linking.openSettings();
+    }
 }

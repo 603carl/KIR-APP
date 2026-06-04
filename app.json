@@ -65,6 +65,7 @@
         {
           "icon": "./assets/images/notification-icon.png",
           "color": "#ffffff",
+          "defaultChannel": "emergency-broadcasts-v4",
           "sounds": [
             "./assets/sounds/emergency_alert.wav"
           ]
@@ -82,7 +83,7 @@
       [
         "react-native-full-screen-notification-incoming-call",
         {
-          "channelId": "emergency-broadcasts-v3",
+          "channelId": "emergency-broadcasts-v4",
           "channelName": "Emergency Broadcasts",
           "notificationColor": "#FF0000"
         }
