@@ -53,6 +53,8 @@ interface OpenSosResult {
 }
 
 const FEED_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const COMMUNITY_FEED_RADIUS_KM = 20;
+const COMMUNITY_FEED_WINDOW_DAYS = 7;
 
 // 0. Memoized Components for Ultra Fast Response
 const CategoryCard = React.memo(({ cat, isSelected, onPress }: { cat: any, isSelected: boolean, onPress: () => void }) => (
@@ -295,7 +297,7 @@ export default function DashboardScreen() {
       const resolved = feed.filter(incident => ['Resolved', 'Closed', 'resolved', 'closed'].includes(incident.status)).length;
       const nextStats = {
         resolvedRate: feed.length ? `${(resolved / feed.length * 100).toFixed(1)}%` : '0%',
-        trend: 'Visible feed',
+        trend: `${COMMUNITY_FEED_WINDOW_DAYS}-day local feed`,
       };
       setIncidents(feed);
       setStats(nextStats);
@@ -306,6 +308,7 @@ export default function DashboardScreen() {
         ]);
       }
     } catch (error) {
+      console.warn('[CommunityFeed] Failed to fetch local feed:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -661,14 +664,22 @@ export default function DashboardScreen() {
               <Text style={styles.sectionTitle}>Community Feed</Text>
               <MotiView from={{ opacity: 0, translateX: -10 }} animate={{ opacity: 1, translateX: 0 }} style={styles.aiBadge}>
                 <Zap size={12} color="#4A5568" />
-                <Text style={styles.aiBadgeText}>AI RANKED</Text>
+                <Text style={styles.aiBadgeText}>LOCAL {COMMUNITY_FEED_RADIUS_KM} KM</Text>
               </MotiView>
             </View>
-            <View style={styles.liveIndicator}><View style={styles.dot} /><Text style={styles.liveText}>REFRESHED</Text></View>
+            <View style={styles.liveIndicator}><View style={styles.dot} /><Text style={styles.liveText}>{COMMUNITY_FEED_WINDOW_DAYS} DAYS</Text></View>
           </View>
 
           {loading && incidents.length === 0 ? (
             [1, 2, 3].map((key) => <SkeletonCard key={key} />)
+          ) : incidents.length === 0 ? (
+            <View style={styles.emptyFeedCard}>
+              <AlertCircle size={28} color={COLORS.primary} />
+              <Text style={styles.emptyFeedTitle}>No local incidents right now</Text>
+              <Text style={styles.emptyFeedText}>
+                Your community feed only shows public incidents from the last {COMMUNITY_FEED_WINDOW_DAYS} days within {COMMUNITY_FEED_RADIUS_KM} km, with county fallback when GPS data is unavailable.
+              </Text>
+            </View>
           ) : (
             incidents.map((item, index) => (
               <IncidentCard 
@@ -844,5 +855,27 @@ const styles = StyleSheet.create({
     color: COLORS.accent,
     fontSize: 10,
     fontWeight: '900',
+  },
+  emptyFeedCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 24,
+    padding: 22,
+    alignItems: 'center',
+    marginBottom: 16,
+    ...SHADOWS.soft,
+  },
+  emptyFeedTitle: {
+    marginTop: 10,
+    fontSize: 17,
+    fontWeight: '900',
+    color: COLORS.black,
+    textAlign: 'center',
+  },
+  emptyFeedText: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
   },
 });
