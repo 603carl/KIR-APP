@@ -135,25 +135,28 @@ class EmergencyBroadcastActivity : Activity() {
     body.addView(titleView)
     body.addView(messageView)
 
-    root.addView(icon, LinearLayout.LayoutParams(dp(96), dp(96)))
+    val iconParams = LinearLayout.LayoutParams(dp(96), dp(96))
+    val bodyParams = LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT
+    )
+    bodyParams.bottomMargin = dp(28)
+    val openButtonParams = LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT
+    )
+    openButtonParams.bottomMargin = dp(4)
+    val dismissButtonParams = LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT
+    )
+
+    root.addView(icon, iconParams)
     root.addView(emergencyTitle)
-    root.addView(body, LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT,
-      ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply {
-      bottomMargin = dp(28)
-    })
-    root.addView(openButton, LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT,
-      ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply {
-      bottomMargin = dp(4)
-    ))
+    root.addView(body, bodyParams)
+    root.addView(openButton, openButtonParams)
     root.addView(disclaimer)
-    root.addView(dismissButton, LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT,
-      ViewGroup.LayoutParams.WRAP_CONTENT
-    ))
+    root.addView(dismissButton, dismissButtonParams)
 
     setContentView(root)
   }
